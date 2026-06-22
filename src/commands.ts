@@ -4,6 +4,7 @@ import type { PluginCommandContext } from '../../../platform/pluginRuntime/types
 import {
   commandText,
   makeId,
+  parseBoolean,
   requireOfficialCommandRuntime,
   requireScopeId
 } from '../shared';
@@ -43,11 +44,11 @@ export function registerPiwigoGalleryCommands(context: PluginCommandContext): vo
   const runtime = requireOfficialCommandRuntime(context);
   const router = context.router;
 
-  router.register('galeria', 'estado', galleryAdminCommand({
+  router.register('gallery', 'status', galleryAdminCommand({
     mutation: 'none',
     auditAction: 'piwigo-gallery.status',
-    usage: '/galeria estado',
-    descriptionKey: 'official.piwigo-gallery.help.galeria'
+    usage: '/gallery status',
+    descriptionKey: 'official.piwigo-gallery.help.gallery'
   }), async (ctx) => {
     const scopeId = requireScopeId(ctx);
     const config = parsePiwigoGalleryConfig(await runtime.configFor(scopeId, ctx.message.senderWid));
@@ -63,10 +64,10 @@ export function registerPiwigoGalleryCommands(context: PluginCommandContext): vo
     };
   });
 
-  router.register('galeria', 'configurar', galleryAdminCommand({
+  router.register('gallery', 'configure', galleryAdminCommand({
     auditAction: 'piwigo-gallery.configure',
-    usage: '/galeria configurar ativo=sim url=https://gallery.example segredo=SECRET auto=30 max=536870912',
-    descriptionKey: 'official.piwigo-gallery.help.galeria'
+    usage: '/gallery configure enabled=yes url=https://gallery.example secret=SECRET auto=30 max=536870912',
+    descriptionKey: 'official.piwigo-gallery.help.gallery'
   }), async (ctx) => {
     const scopeId = requireScopeId(ctx);
     const args = ctx.remainingArgs ?? ctx.command.args;
@@ -87,28 +88,28 @@ export function registerPiwigoGalleryCommands(context: PluginCommandContext): vo
     return { handled: true, text: ctx.t('official.piwigo-gallery.configUpdated') };
   });
 
-  router.register('enviar-galeria', '*', galleryUploadCommand({
+  router.register('send', 'gallery', galleryUploadCommand({
     auditAction: 'piwigo-gallery.upload.start',
-    usage: '/enviar-galeria',
-    descriptionKey: 'official.piwigo-gallery.help.enviar'
+    usage: '/send gallery',
+    descriptionKey: 'official.piwigo-gallery.help.send'
   }), async (ctx) => startUploadFlow(context, ctx));
 
-  router.register('carregar', '*', galleryUploadCommand({
+  router.register('upload', '*', galleryUploadCommand({
     auditAction: 'piwigo-gallery.upload.finalize',
-    usage: '/carregar',
-    descriptionKey: 'official.piwigo-gallery.help.carregar'
+    usage: '/upload',
+    descriptionKey: 'official.piwigo-gallery.help.upload'
   }), async (ctx) => finalizeActiveUpload(runtime, ctx));
 
-  router.register('cancelar', '*', galleryUploadCommand({
+  router.register('cancel', '*', galleryUploadCommand({
     auditAction: 'piwigo-gallery.upload.cancel',
-    usage: '/cancelar',
-    descriptionKey: 'official.piwigo-gallery.help.cancelar'
+    usage: '/cancel',
+    descriptionKey: 'official.piwigo-gallery.help.cancel'
   }), async (ctx) => cancelActiveUpload(context, ctx));
 
-  router.register('conectar-galeria', '*', galleryAuthCommand({
+  router.register('connect', 'gallery', galleryAuthCommand({
     auditAction: 'piwigo-gallery.account.link',
-    usage: '/conectar-galeria CODE',
-    descriptionKey: 'official.piwigo-gallery.help.conectar'
+    usage: '/connect gallery CODE',
+    descriptionKey: 'official.piwigo-gallery.help.connect'
   }), async (ctx) => {
     const code = commandText(ctx).toUpperCase();
     if (!code) {
@@ -126,10 +127,10 @@ export function registerPiwigoGalleryCommands(context: PluginCommandContext): vo
     }
   });
 
-  router.register('entrar-galeria', '*', galleryAuthCommand({
+  router.register('login', 'gallery', galleryAuthCommand({
     auditAction: 'piwigo-gallery.account.login',
-    usage: '/entrar-galeria CODE',
-    descriptionKey: 'official.piwigo-gallery.help.entrar'
+    usage: '/login gallery CODE',
+    descriptionKey: 'official.piwigo-gallery.help.login'
   }), async (ctx) => {
     const code = commandText(ctx).toUpperCase();
     if (!code) {
@@ -147,10 +148,10 @@ export function registerPiwigoGalleryCommands(context: PluginCommandContext): vo
     }
   });
 
-  router.register('registar-galeria', '*', galleryAuthCommand({
+  router.register('register', 'gallery', galleryAuthCommand({
     auditAction: 'piwigo-gallery.account.register',
-    usage: '/registar-galeria Your Name',
-    descriptionKey: 'official.piwigo-gallery.help.registar'
+    usage: '/register gallery Your Name',
+    descriptionKey: 'official.piwigo-gallery.help.register'
   }), async (ctx) => {
     const username = commandText(ctx) || ctx.message.senderDisplayName || '';
     if (!username.trim()) {
@@ -410,8 +411,9 @@ function parseConfigPatch(args: string[]): Record<string, unknown> | undefined {
     const key = arg.slice(0, separator).trim().toLowerCase();
     const value = arg.slice(separator + 1).trim();
     switch (key) {
-      case 'ativo': {
-        const parsed = parsePortugueseBoolean(value);
+      case 'enabled':
+      case 'active': {
+        const parsed = parseBoolean(value);
         if (parsed === undefined) return undefined;
         patch.enabled = parsed;
         break;
@@ -419,7 +421,7 @@ function parseConfigPatch(args: string[]): Record<string, unknown> | undefined {
       case 'url':
         patch.piwigoBaseUrl = value;
         break;
-      case 'segredo':
+      case 'secret':
         patch.botSecret = value;
         break;
       case 'auto':
@@ -441,13 +443,6 @@ function parseConfigPatch(args: string[]): Record<string, unknown> | undefined {
     }
   }
   return patch;
-}
-
-function parsePortugueseBoolean(value: string): boolean | undefined {
-  const normalized = value.trim().toLowerCase();
-  if (['sim', 's', 'ligado', 'ativo', 'on', 'true', '1'].includes(normalized)) return true;
-  if (['nao', 'não', 'n', 'desligado', 'inativo', 'off', 'false', '0'].includes(normalized)) return false;
-  return undefined;
 }
 
 function errorMessage(error: unknown): string {

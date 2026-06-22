@@ -19,14 +19,14 @@ export const piwigoGalleryManifest: PluginManifest = {
   descriptionKey: 'official.piwigo-gallery.description',
   defaultMessages: piwigoGalleryMessages,
   commands: [
-    '/galeria estado',
-    '/galeria configurar',
-    '/enviar-galeria',
-    '/carregar',
-    '/cancelar',
-    '/conectar-galeria',
-    '/entrar-galeria',
-    '/registar-galeria'
+    '/gallery status',
+    '/gallery configure',
+    '/send gallery',
+    '/upload',
+    '/cancel',
+    '/connect gallery',
+    '/login gallery',
+    '/register gallery'
   ],
   eventSubscriptions: ['message', 'plugin.job'],
   requiredPermissions: [

@@ -1,1 +1,87 @@
-export const piwigoGalleryControls = [];
+import { defineControl } from '../../../platform/operatorConsole/controlCatalog/define';
+import type { ControlDescriptor, ControlSchemaMetadata, ControlUiHint } from '../../../platform/operatorConsole/controlCatalog/types';
+import { PIWIGO_GALLERY_PLUGIN_ID } from './manifest';
+
+function control(input: {
+  path: string;
+  label: string;
+  description: string;
+  order: number;
+  schema: ControlSchemaMetadata;
+  ui: ControlUiHint;
+  dangerous?: boolean | undefined;
+  sensitive?: boolean | undefined;
+  confirmationMessage?: string | undefined;
+}): ControlDescriptor {
+  return defineControl({
+    id: `plugin.${PIWIGO_GALLERY_PLUGIN_ID}.${input.path}`,
+    label: input.label,
+    description: input.description,
+    plane: 'plugin-scope-config',
+    domain: 'official-plugin-settings',
+    section: 'Piwigo Gallery',
+    order: input.order,
+    visibility: 'bot_admin',
+    configurable: true,
+    storage: { kind: 'plugin-scope-config', pluginId: PIWIGO_GALLERY_PLUGIN_ID, path: input.path },
+    schema: input.schema,
+    ui: input.ui,
+    restartRequirement: 'NO_RESTART',
+    dangerous: input.dangerous ?? false,
+    confirmation: input.dangerous
+      ? { required: true, message: input.confirmationMessage ?? 'This changes the Piwigo gallery integration.' }
+      : undefined,
+    sensitivity: input.sensitive ? { sensitive: true, redact: 'configured-state' } : { sensitive: false, redact: 'none' },
+    auditAction: 'operator_console.plugin_config.update',
+    relatedCommandIds: ['/gallery status', '/gallery configure', '/send gallery', '/upload'],
+    relatedActionIds: []
+  });
+}
+
+export const piwigoGalleryControls: ControlDescriptor[] = [
+  control({
+    path: 'enabled',
+    label: 'Enabled',
+    description: 'Enable Piwigo gallery uploads in this scope.',
+    order: 10,
+    schema: { type: 'boolean' },
+    ui: { widget: 'toggle' }
+  }),
+  control({
+    path: 'piwigoBaseUrl',
+    label: 'Piwigo URL',
+    description: 'Base URL for the Piwigo gallery used by this scope.',
+    order: 20,
+    schema: { type: 'string', format: 'url' },
+    ui: { widget: 'url' },
+    dangerous: true,
+    confirmationMessage: 'This changes the gallery destination for uploads in this scope.'
+  }),
+  control({
+    path: 'botSecret',
+    label: 'Bot secret',
+    description: 'Shared secret used by the bot to authenticate with Piwigo.',
+    order: 30,
+    schema: { type: 'secret', format: 'token' },
+    ui: { widget: 'secret' },
+    dangerous: true,
+    sensitive: true,
+    confirmationMessage: 'This changes the credential used to authenticate with Piwigo.'
+  }),
+  control({
+    path: 'autoFinalizeMinutes',
+    label: 'Auto-finalize minutes',
+    description: 'Minutes after the last accepted document before a gallery upload is finalized automatically.',
+    order: 40,
+    schema: { type: 'number', min: 1, max: 1440 },
+    ui: { widget: 'number' }
+  }),
+  control({
+    path: 'maxFileBytes',
+    label: 'Max file size',
+    description: 'Maximum accepted WhatsApp document size for gallery uploads.',
+    order: 50,
+    schema: { type: 'number', unit: 'bytes', min: 1, max: 25 * 1024 * 1024 * 1024 },
+    ui: { widget: 'number' }
+  })
+];

@@ -6,6 +6,13 @@ import {
 import { prisma } from '../../../platform/db/prisma';
 import { PluginScopeResolver } from '../../../platform/pluginRuntime/runtime/pluginScopeResolver';
 import { resolveBotProfileId } from '../../../platform/tenancy/botProfileTenant';
+import {
+  configConnection,
+  parsePiwigoGalleryConfig,
+  samePiwigoBaseUrl,
+  type GalleryConnection,
+  type PiwigoGalleryConfig
+} from './config';
 import { PIWIGO_GALLERY_PLUGIN_ID } from './manifest';
 
 const MANAGED_GROUP_SOURCE_KINDS = [
@@ -78,6 +85,136 @@ export async function isPiwigoGalleryEligibleWid(
   return false;
 }
 
+export interface ConfiguredPiwigoGalleryScope {
+  scopeId: string;
+  groupId: string;
+  groupWid: string;
+  label: string;
+  config: PiwigoGalleryConfig;
+  connection: GalleryConnection;
+}
+
+export async function listConfiguredPiwigoGalleryEligibleScopes(
+  wid: string,
+  input: {
+    db?: PrismaClient | undefined;
+    botProfileId?: string | undefined;
+    piwigoBaseUrl?: string | undefined;
+  } = {}
+): Promise<ConfiguredPiwigoGalleryScope[]> {
+  const db = input.db ?? prisma;
+  const botProfileId = input.botProfileId ?? resolveBotProfileId();
+  const identity = await db.waIdentity.findFirst({
+    where: {
+      OR: [
+        { wid },
+        { aliases: { some: { wid } } }
+      ]
+    },
+    select: { id: true }
+  });
+  if (!identity) {
+    return [];
+  }
+
+  const records = await db.identityAccessRecord.findMany({
+    where: {
+      botProfileId,
+      identityId: identity.id,
+      active: true,
+      sourceKind: { in: [...MANAGED_GROUP_SOURCE_KINDS] },
+      group: {
+        is: {
+          botProfileId,
+          enrollmentStatus: EnrollmentStatus.ENROLLED
+        }
+      }
+    },
+    select: {
+      group: {
+        select: {
+          id: true,
+          chatId: true,
+          displayName: true
+        }
+      }
+    },
+    orderBy: { id: 'asc' }
+  });
+
+  const scopeResolver = new PluginScopeResolver(db, botProfileId);
+  const groups = uniqueBy(records.flatMap((record) => record.group ? [record.group] : []), (group) => group.id);
+  const scopes = new Map<string, ConfiguredPiwigoGalleryScope>();
+  for (const group of groups) {
+    const resolvedScopes = await scopeResolver.resolveGroupScopes(group.chatId);
+    for (const resolved of resolvedScopes) {
+      const effective = await resolveEffectivePiwigoGalleryConfig(resolved.scopeId, scopeResolver, db, botProfileId);
+      if (!effective || !effective.config.enabled) {
+        continue;
+      }
+      if (input.piwigoBaseUrl && !samePiwigoBaseUrl(effective.connection.piwigoBaseUrl, input.piwigoBaseUrl)) {
+        continue;
+      }
+      scopes.set(`${resolved.scopeId}:${resolved.groupId}`, {
+        scopeId: resolved.scopeId,
+        groupId: resolved.groupId,
+        groupWid: resolved.groupWid,
+        label: group.displayName || resolved.groupWid,
+        config: effective.config,
+        connection: effective.connection
+      });
+    }
+  }
+
+  return [...scopes.values()].sort((left, right) =>
+    left.label.localeCompare(right.label) || left.scopeId.localeCompare(right.scopeId)
+  );
+}
+
+async function resolveEffectivePiwigoGalleryConfig(
+  scopeId: string,
+  scopeResolver: PluginScopeResolver,
+  db: PrismaClient,
+  botProfileId: string
+): Promise<{ config: PiwigoGalleryConfig; connection: GalleryConnection } | undefined> {
+  let scopeIds: string[];
+  try {
+    scopeIds = await scopeResolver.resolveEffectiveScopeIds(scopeId);
+  } catch {
+    scopeIds = [scopeId];
+  }
+
+  const instances = await db.pluginInstance.findMany({
+    where: {
+      pluginId: PIWIGO_GALLERY_PLUGIN_ID,
+      enabled: true,
+      scopeId: { in: scopeIds },
+      scope: { botProfileId }
+    },
+    select: {
+      scopeId: true,
+      configJson: true
+    }
+  });
+  if (instances.length === 0) {
+    return undefined;
+  }
+
+  const byScope = new Map(instances.map((instance) => [instance.scopeId, instance]));
+  const merged: Record<string, unknown> = {};
+  for (const candidateScopeId of scopeIds) {
+    const instance = byScope.get(candidateScopeId);
+    if (!instance) {
+      continue;
+    }
+    Object.assign(merged, asRecord(instance.configJson));
+  }
+
+  const config = parsePiwigoGalleryConfig(merged);
+  const connection = configConnection(config);
+  return connection ? { config, connection } : undefined;
+}
+
 async function scopeHasPiwigoGalleryEnabled(
   scopeId: string,
   scopeResolver: PluginScopeResolver,
@@ -114,4 +251,10 @@ function uniqueBy<T>(values: T[], keyOf: (value: T) => string): T[] {
     result.push(value);
   }
   return result;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+    ? value as Record<string, unknown>
+    : {};
 }

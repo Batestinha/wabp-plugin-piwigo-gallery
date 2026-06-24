@@ -37,3 +37,7 @@ export function configConnection(config: PiwigoGalleryConfig): GalleryConnection
 export function normalizePiwigoBaseUrl(input: string): string {
   return input.trim().replace(/\/+$/, '');
 }
+
+export function samePiwigoBaseUrl(left: string, right: string): boolean {
+  return normalizePiwigoBaseUrl(left).toLowerCase() === normalizePiwigoBaseUrl(right).toLowerCase();
+}

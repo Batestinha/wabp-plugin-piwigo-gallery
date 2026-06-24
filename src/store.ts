@@ -2,8 +2,6 @@ import type { PluginDataStore } from '../../../platform/pluginRuntime/manager/pl
 import type { GalleryConnection, PiwigoGalleryConfig } from './config';
 import { configConnection } from './config';
 
-const GLOBAL_CONNECTION_KEY = 'gallery.connection';
-
 export interface GalleryUploadDraft {
   flowSessionId: string;
   flowType: string;
@@ -54,23 +52,38 @@ export interface GalleryUploadBatch {
   error?: string | undefined;
 }
 
-export async function saveGalleryConnection(store: PluginDataStore, connection: GalleryConnection): Promise<void> {
-  await store.set(GLOBAL_CONNECTION_KEY, connection);
+export interface GalleryScopeOption {
+  scopeId: string;
+  label: string;
+}
+
+export interface GalleryLinkRequest {
+  requestId: string;
+  requestToken: string;
+  whatsappJid: string;
+  piwigoBaseUrl?: string | undefined;
+  scopeOptions: GalleryScopeOption[];
+  createdAt: string;
+  expiresAt: string;
 }
 
 export async function resolveGalleryConnection(
-  store: PluginDataStore,
+  _store: PluginDataStore,
   config?: PiwigoGalleryConfig | undefined
 ): Promise<GalleryConnection | undefined> {
-  const scoped = config ? configConnection(config) : undefined;
-  if (scoped) {
-    return scoped;
-  }
-  const stored = await store.get<GalleryConnection>(GLOBAL_CONNECTION_KEY);
-  if (!stored?.piwigoBaseUrl || !stored.botSecret) {
-    return undefined;
-  }
-  return stored;
+  return config ? configConnection(config) : undefined;
+}
+
+export async function saveLinkRequest(store: PluginDataStore, request: GalleryLinkRequest): Promise<void> {
+  await store.set(linkRequestKey(request.requestToken), request);
+}
+
+export function getLinkRequest(store: PluginDataStore, requestToken: string): Promise<GalleryLinkRequest | undefined> {
+  return store.get<GalleryLinkRequest>(linkRequestKey(requestToken));
+}
+
+export async function deleteLinkRequest(store: PluginDataStore, requestToken: string): Promise<void> {
+  await store.delete(linkRequestKey(requestToken));
 }
 
 export async function saveDraft(store: PluginDataStore, draft: GalleryUploadDraft): Promise<void> {
@@ -124,4 +137,8 @@ function batchKey(batchId: string): string {
 
 function activeKey(chatId: string, actorWid: string): string {
   return `active-upload:${chatId}:${actorWid}`;
+}
+
+function linkRequestKey(requestToken: string): string {
+  return `link-request:${requestToken.toUpperCase()}`;
 }

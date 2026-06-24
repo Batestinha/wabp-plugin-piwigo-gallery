@@ -8,7 +8,7 @@ import {
   requireOfficialCommandRuntime,
   requireScopeId
 } from '../shared';
-import { configConnection, parsePiwigoGalleryConfig } from './config';
+import { parsePiwigoGalleryConfig } from './config';
 import {
   galleryConfirmPurpose,
   galleryFlowAnswers,
@@ -23,17 +23,18 @@ import {
 import { PiwigoGalleryClient } from './piwigoClient';
 import {
   clearActiveBatch,
+  deleteLinkRequest,
   deleteDraft,
   getActiveBatch,
   getDraft,
+  getLinkRequest,
   resolveGalleryConnection,
   saveBatch,
   saveDraft,
-  saveGalleryConnection,
   setActiveBatch,
   type GalleryUploadBatch
 } from './store';
-import { assertPiwigoGalleryEligibleWid } from './eligibility';
+import { listConfiguredPiwigoGalleryEligibleScopes } from './eligibility';
 
 const SCOPE_TARGET: CommandTargetSpec = {
   kind: 'scope',
@@ -82,10 +83,6 @@ export function registerPiwigoGalleryCommands(context: PluginCommandContext): vo
     const current = parsePiwigoGalleryConfig(await runtime.configFor(scopeId, ctx.message.senderWid));
     const next = parsePiwigoGalleryConfig({ ...current, ...patch });
     await runtime.setConfig(scopeId, next);
-    const connection = configConnection(next);
-    if (connection) {
-      await saveGalleryConnection(runtime.dataStore, connection);
-    }
     return { handled: true, text: ctx.t('official.piwigo-gallery.configUpdated') };
   });
 
@@ -128,16 +125,26 @@ export function registerPiwigoGalleryCommands(context: PluginCommandContext): vo
     if (!code) {
       return { handled: true, text: ctx.t('official.piwigo-gallery.loginUsage') };
     }
-    const connection = await resolveGalleryConnection(runtime.dataStore);
-    if (!connection) {
+    const scopes = await listConfiguredPiwigoGalleryEligibleScopes(ctx.message.senderWid);
+    if (scopes.length === 0) {
       return { handled: true, text: ctx.t('official.piwigo-gallery.notConfigured') };
     }
-    try {
-      const result = await new PiwigoGalleryClient(connection).consumeLoginCode(code, ctx.message.senderWid);
-      return { handled: true, text: ctx.t('official.piwigo-gallery.loginApproved', { username: result.username }) };
-    } catch (error) {
-      return { handled: true, text: ctx.t('official.piwigo-gallery.failed', { reason: errorMessage(error) }) };
+    let lastError: unknown;
+    const tried = new Set<string>();
+    for (const scope of scopes) {
+      const key = `${scope.connection.piwigoBaseUrl}\n${scope.connection.botSecret}`;
+      if (tried.has(key)) {
+        continue;
+      }
+      tried.add(key);
+      try {
+        const result = await new PiwigoGalleryClient(scope.connection).consumeLoginCode(code, ctx.message.senderWid);
+        return { handled: true, text: ctx.t('official.piwigo-gallery.loginApproved', { username: result.username }) };
+      } catch (error) {
+        lastError = error;
+      }
     }
+    return { handled: true, text: ctx.t('official.piwigo-gallery.failed', { reason: errorMessage(lastError) }) };
   });
 
   router.register('register', 'gallery', galleryAuthCommand({
@@ -149,13 +156,16 @@ export function registerPiwigoGalleryCommands(context: PluginCommandContext): vo
     if (!username.trim()) {
       return { handled: true, text: ctx.t('official.piwigo-gallery.registerUsage') };
     }
-    const connection = await resolveGalleryConnection(runtime.dataStore);
-    if (!connection) {
+    const scopes = await listConfiguredPiwigoGalleryEligibleScopes(ctx.message.senderWid);
+    if (scopes.length === 0) {
       return { handled: true, text: ctx.t('official.piwigo-gallery.notConfigured') };
     }
+    if (scopes.length > 1) {
+      return { handled: true, text: ctx.t('official.piwigo-gallery.multipleEligibleScopes') };
+    }
+    const scope = scopes[0]!;
     try {
-      await assertPiwigoGalleryEligibleWid(ctx.message.senderWid);
-      const result = await new PiwigoGalleryClient(connection).registerAccount(username, ctx.message.senderWid);
+      const result = await new PiwigoGalleryClient(scope.connection).registerAccount(username, ctx.message.senderWid, scope.scopeId);
       return {
         handled: true,
         text: ctx.t(result.pending ? 'official.piwigo-gallery.registeredPending' : 'official.piwigo-gallery.registered', {
@@ -178,12 +188,42 @@ async function completeLinkRequest(
     return { handled: true, text: ctx.t(decision === 'approve' ? 'official.piwigo-gallery.confirmUsage' : 'official.piwigo-gallery.denyUsage') };
   }
   try {
-    await assertPiwigoGalleryEligibleWid(ctx.message.senderWid);
-    const connection = await resolveGalleryConnection(runtime.dataStore);
+    const request = await getLinkRequest(runtime.dataStore, token);
+    if (!request || new Date(request.expiresAt).getTime() < Date.now()) {
+      if (request) {
+        await deleteLinkRequest(runtime.dataStore, token);
+      }
+      return { handled: true, text: ctx.t('official.piwigo-gallery.failed', { reason: 'Invalid or expired link request.' }) };
+    }
+    if (request.whatsappJid !== ctx.message.senderWid) {
+      return { handled: true, text: ctx.t('official.piwigo-gallery.failed', { reason: 'WhatsApp account does not match this link request.' }) };
+    }
+    const firstScope = request.scopeOptions[0];
+    if (!firstScope) {
+      return { handled: true, text: ctx.t('official.piwigo-gallery.notConfigured') };
+    }
+    const connection = await connectionForScope(runtime, firstScope.scopeId, ctx.message.senderWid);
     if (!connection) {
       return { handled: true, text: ctx.t('official.piwigo-gallery.notConfigured') };
     }
-    const result = await new PiwigoGalleryClient(connection).completeLinkRequest(token, ctx.message.senderWid, decision);
+    const selectedScopeId = decision === 'approve' && request.scopeOptions.length === 1
+      ? firstScope.scopeId
+      : undefined;
+    const result = await new PiwigoGalleryClient(connection).completeLinkRequest(token, ctx.message.senderWid, decision, {
+      ...(selectedScopeId ? { scopeId: selectedScopeId } : {}),
+      ...(decision === 'approve' && request.scopeOptions.length > 1
+        ? {
+            eligibleScopes: request.scopeOptions.map((scope) => ({
+              scope_id: scope.scopeId,
+              label: scope.label
+            }))
+          }
+        : {})
+    });
+    await deleteLinkRequest(runtime.dataStore, token);
+    if (decision === 'approve' && result.status === 'scope_required') {
+      return { handled: true, text: ctx.t('official.piwigo-gallery.linkScopeRequired') };
+    }
     return {
       handled: true,
       text: ctx.t(decision === 'approve' ? 'official.piwigo-gallery.linkConfirmed' : 'official.piwigo-gallery.linkDenied', {
@@ -217,7 +257,7 @@ async function startUploadFlow(context: PluginCommandContext, ctx: CommandContex
   try {
     const client = new PiwigoGalleryClient(connection);
     const [peopleResult, acceptedTypes] = await Promise.all([
-      client.people(ctx.message.senderWid),
+      client.people(ctx.message.senderWid, scopeId),
       client.acceptedTypes()
     ]);
     if (peopleResult.people.length === 0) {
@@ -248,6 +288,15 @@ async function startUploadFlow(context: PluginCommandContext, ctx: CommandContex
   } catch (error) {
     return { handled: true, text: ctx.t('official.piwigo-gallery.failed', { reason: errorMessage(error) }) };
   }
+}
+
+async function connectionForScope(
+  runtime: ReturnType<typeof requireOfficialCommandRuntime>,
+  scopeId: string,
+  actorWid?: string | undefined
+) {
+  const config = parsePiwigoGalleryConfig(await runtime.configFor(scopeId, actorWid));
+  return resolveGalleryConnection(runtime.dataStore, config);
 }
 
 function registerUploadFlowCompletionHandler(context: PluginCommandContext, flowType: string, t: CommandContext['t']): void {

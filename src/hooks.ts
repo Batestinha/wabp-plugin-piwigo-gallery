@@ -169,6 +169,7 @@ async function finalizeBatch(
     try {
       const result = await client.uploadForJid({
         whatsappJid: batch.actorWid,
+        scopeId: batch.scopeId,
         onde: batch.onde,
         quando: batch.quando,
         withUserIds: batch.withUserIds,

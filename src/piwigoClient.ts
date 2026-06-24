@@ -40,8 +40,16 @@ export class PiwigoGalleryClient {
     return this.post<PiwigoPeopleResult>('local.whatsappMedia.people', { whatsapp_jid: whatsappJid });
   }
 
-  consumeLinkCode(code: string, whatsappJid: string): Promise<{ username: string }> {
-    return this.post('local.whatsappLink.consumeCode', { code, whatsapp_jid: whatsappJid });
+  completeLinkRequest(
+    requestToken: string,
+    whatsappJid: string,
+    decision: 'approve' | 'deny'
+  ): Promise<{ status: string; username?: string }> {
+    return this.post('local.whatsappLink.completeRequest', {
+      request_token: requestToken,
+      whatsapp_jid: whatsappJid,
+      decision
+    });
   }
 
   consumeLoginCode(code: string, whatsappJid: string): Promise<{ username: string }> {

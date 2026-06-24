@@ -24,7 +24,8 @@ export const piwigoGalleryManifest: PluginManifest = {
     '/send gallery',
     '/upload',
     '/cancel',
-    '/connect gallery',
+    '/confirm gallery',
+    '/deny gallery',
     '/login gallery',
     '/register gallery'
   ],

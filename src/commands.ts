@@ -106,26 +106,17 @@ export function registerPiwigoGalleryCommands(context: PluginCommandContext): vo
     descriptionKey: 'official.piwigo-gallery.help.cancel'
   }), async (ctx) => cancelActiveUpload(context, ctx));
 
-  router.register('connect', 'gallery', galleryAuthCommand({
-    auditAction: 'piwigo-gallery.account.link',
-    usage: '/connect gallery CODE',
-    descriptionKey: 'official.piwigo-gallery.help.connect'
-  }), async (ctx) => {
-    const code = commandText(ctx).toUpperCase();
-    if (!code) {
-      return { handled: true, text: ctx.t('official.piwigo-gallery.linkUsage') };
-    }
-    const connection = await resolveGalleryConnection(runtime.dataStore);
-    if (!connection) {
-      return { handled: true, text: ctx.t('official.piwigo-gallery.notConfigured') };
-    }
-    try {
-      const result = await new PiwigoGalleryClient(connection).consumeLinkCode(code, ctx.message.senderWid);
-      return { handled: true, text: ctx.t('official.piwigo-gallery.linked', { username: result.username }) };
-    } catch (error) {
-      return { handled: true, text: ctx.t('official.piwigo-gallery.failed', { reason: errorMessage(error) }) };
-    }
-  });
+  router.register('confirm', 'gallery', galleryAuthCommand({
+    auditAction: 'piwigo-gallery.account.link.confirm',
+    usage: '/confirm gallery TOKEN',
+    descriptionKey: 'official.piwigo-gallery.help.confirm'
+  }), async (ctx) => completeLinkRequest(runtime, ctx, 'approve'));
+
+  router.register('deny', 'gallery', galleryAuthCommand({
+    auditAction: 'piwigo-gallery.account.link.deny',
+    usage: '/deny gallery TOKEN',
+    descriptionKey: 'official.piwigo-gallery.help.deny'
+  }), async (ctx) => completeLinkRequest(runtime, ctx, 'deny'));
 
   router.register('login', 'gallery', galleryAuthCommand({
     auditAction: 'piwigo-gallery.account.login',
@@ -173,6 +164,32 @@ export function registerPiwigoGalleryCommands(context: PluginCommandContext): vo
       return { handled: true, text: ctx.t('official.piwigo-gallery.failed', { reason: errorMessage(error) }) };
     }
   });
+}
+
+async function completeLinkRequest(
+  runtime: ReturnType<typeof requireOfficialCommandRuntime>,
+  ctx: CommandContext,
+  decision: 'approve' | 'deny'
+) {
+  const token = commandText(ctx).toUpperCase();
+  if (!token) {
+    return { handled: true, text: ctx.t(decision === 'approve' ? 'official.piwigo-gallery.confirmUsage' : 'official.piwigo-gallery.denyUsage') };
+  }
+  const connection = await resolveGalleryConnection(runtime.dataStore);
+  if (!connection) {
+    return { handled: true, text: ctx.t('official.piwigo-gallery.notConfigured') };
+  }
+  try {
+    const result = await new PiwigoGalleryClient(connection).completeLinkRequest(token, ctx.message.senderWid, decision);
+    return {
+      handled: true,
+      text: ctx.t(decision === 'approve' ? 'official.piwigo-gallery.linkConfirmed' : 'official.piwigo-gallery.linkDenied', {
+        username: result.username ?? ''
+      })
+    };
+  } catch (error) {
+    return { handled: true, text: ctx.t('official.piwigo-gallery.failed', { reason: errorMessage(error) }) };
+  }
 }
 
 async function startUploadFlow(context: PluginCommandContext, ctx: CommandContext) {

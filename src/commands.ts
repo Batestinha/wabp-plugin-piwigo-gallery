@@ -33,6 +33,7 @@ import {
   setActiveBatch,
   type GalleryUploadBatch
 } from './store';
+import { assertPiwigoGalleryEligibleWid } from './eligibility';
 
 const SCOPE_TARGET: CommandTargetSpec = {
   kind: 'scope',
@@ -153,6 +154,7 @@ export function registerPiwigoGalleryCommands(context: PluginCommandContext): vo
       return { handled: true, text: ctx.t('official.piwigo-gallery.notConfigured') };
     }
     try {
+      await assertPiwigoGalleryEligibleWid(ctx.message.senderWid);
       const result = await new PiwigoGalleryClient(connection).registerAccount(username, ctx.message.senderWid);
       return {
         handled: true,
@@ -175,11 +177,12 @@ async function completeLinkRequest(
   if (!token) {
     return { handled: true, text: ctx.t(decision === 'approve' ? 'official.piwigo-gallery.confirmUsage' : 'official.piwigo-gallery.denyUsage') };
   }
-  const connection = await resolveGalleryConnection(runtime.dataStore);
-  if (!connection) {
-    return { handled: true, text: ctx.t('official.piwigo-gallery.notConfigured') };
-  }
   try {
+    await assertPiwigoGalleryEligibleWid(ctx.message.senderWid);
+    const connection = await resolveGalleryConnection(runtime.dataStore);
+    if (!connection) {
+      return { handled: true, text: ctx.t('official.piwigo-gallery.notConfigured') };
+    }
     const result = await new PiwigoGalleryClient(connection).completeLinkRequest(token, ctx.message.senderWid, decision);
     return {
       handled: true,

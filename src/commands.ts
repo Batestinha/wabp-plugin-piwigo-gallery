@@ -421,6 +421,7 @@ function galleryAdminCommand(input: {
     targets: [SCOPE_TARGET],
     mutation: input.mutation ?? 'durable',
     auditAction: input.auditAction,
+    assistant: galleryAssistantMetadata(input.usage, input.mutation ?? 'durable'),
     help: {
       familyKey: 'official.piwigo-gallery.help.family',
       descriptionKey: input.descriptionKey,
@@ -443,6 +444,7 @@ function galleryUploadCommand(input: {
     targets: [SCOPE_TARGET],
     mutation: 'durable',
     auditAction: input.auditAction,
+    assistant: galleryAssistantMetadata(input.usage, 'durable'),
     help: {
       familyKey: 'official.piwigo-gallery.help.family',
       descriptionKey: input.descriptionKey,
@@ -462,11 +464,23 @@ function galleryAuthCommand(input: {
     pluginId: PIWIGO_GALLERY_PLUGIN_ID,
     mutation: 'durable',
     auditAction: input.auditAction,
+    assistant: galleryAssistantMetadata(input.usage, 'durable'),
     help: {
       familyKey: 'official.piwigo-gallery.help.family',
       descriptionKey: input.descriptionKey,
       usage: input.usage
     }
+  };
+}
+
+function galleryAssistantMetadata(
+  usage: string,
+  mutation: CommandMetadata['mutation']
+): CommandMetadata['assistant'] {
+  return {
+    intentTags: usage.replace(/^\//, '').split(/\s+/).filter(Boolean).slice(0, 3),
+    executable: true,
+    requiresConfirmation: mutation !== 'none'
   };
 }
 

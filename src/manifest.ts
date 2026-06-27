@@ -37,5 +37,40 @@ export const piwigoGalleryManifest: PluginManifest = {
   requiredBotCapabilities: [],
   configSchema: piwigoGalleryConfigSchema,
   dangerousActions: [],
-  backgroundJobs: [PIWIGO_GALLERY_FINALIZE_JOB]
+  backgroundJobs: [PIWIGO_GALLERY_FINALIZE_JOB],
+  assistant: {
+    summary: 'Piwigo gallery upload workflow for collecting WhatsApp documents, linking users, and finalizing gallery batches.',
+    useCases: [
+      'Explain whether gallery uploads are configured for the current scope.',
+      'Start and manage a guided gallery upload flow.',
+      'Help users link or register a Piwigo account.'
+    ],
+    prerequisites: [
+      'enabled=true in the target scope.',
+      'The Piwigo base URL and bot secret must be configured before uploads can start.',
+      'Upload users need the scoped piwigo-gallery.upload permission.'
+    ],
+    workflows: [
+      {
+        intent: 'gallery_status',
+        description: 'Inspect gallery configuration and connection state.',
+        commands: ['/gallery status']
+      },
+      {
+        intent: 'gallery_configure',
+        description: 'Configure the Piwigo endpoint and upload limits for the scope.',
+        commands: ['/gallery configure']
+      },
+      {
+        intent: 'gallery_upload',
+        description: 'Start, finalize, or cancel a guided gallery upload batch.',
+        commands: ['/send gallery', '/upload', '/cancel']
+      },
+      {
+        intent: 'gallery_account',
+        description: 'Confirm, deny, log in, or register a linked gallery account.',
+        commands: ['/confirm gallery', '/deny gallery', '/login gallery', '/register gallery']
+      }
+    ]
+  }
 };

@@ -5,7 +5,7 @@ import {
 } from '@prisma/client';
 import { prisma } from '../../../platform/db/prisma';
 import { PluginScopeResolver } from '../../../platform/pluginRuntime/runtime/pluginScopeResolver';
-import { resolveBotProfileId } from '../../../platform/tenancy/botProfileTenant';
+import { resolveBotBindingId, resolveBotProfileId } from '../../../platform/tenancy/botProfileTenant';
 import {
   configConnection,
   parsePiwigoGalleryConfig,
@@ -23,9 +23,10 @@ const MANAGED_GROUP_SOURCE_KINDS = [
 export async function assertPiwigoGalleryEligibleWid(
   wid: string,
   db: PrismaClient = prisma,
-  botProfileId: string = resolveBotProfileId()
+  botProfileId: string = resolveBotProfileId(),
+  botBindingId: string = resolveBotBindingId(undefined, botProfileId)
 ): Promise<void> {
-  if (await isPiwigoGalleryEligibleWid(wid, db, botProfileId)) {
+  if (await isPiwigoGalleryEligibleWid(wid, db, botProfileId, botBindingId)) {
     return;
   }
   throw new Error('WhatsApp account is not a member of a Piwigo-enabled group.');
@@ -34,7 +35,8 @@ export async function assertPiwigoGalleryEligibleWid(
 export async function isPiwigoGalleryEligibleWid(
   wid: string,
   db: PrismaClient = prisma,
-  botProfileId: string = resolveBotProfileId()
+  botProfileId: string = resolveBotProfileId(),
+  botBindingId: string = resolveBotBindingId(undefined, botProfileId)
 ): Promise<boolean> {
   const identity = await db.waIdentity.findFirst({
     where: {
@@ -51,13 +53,13 @@ export async function isPiwigoGalleryEligibleWid(
 
   const records = await db.identityAccessRecord.findMany({
     where: {
-      botProfileId,
+      botBindingId,
       identityId: identity.id,
       active: true,
       sourceKind: { in: [...MANAGED_GROUP_SOURCE_KINDS] },
       group: {
         is: {
-          botProfileId,
+          botBindingId,
           enrollmentStatus: EnrollmentStatus.ENROLLED
         }
       }
@@ -72,7 +74,7 @@ export async function isPiwigoGalleryEligibleWid(
     }
   });
 
-  const scopeResolver = new PluginScopeResolver(db, botProfileId);
+  const scopeResolver = new PluginScopeResolver(db, botProfileId, botBindingId);
   const groups = uniqueBy(records.flatMap((record) => record.group ? [record.group] : []), (group) => group.id);
   for (const group of groups) {
     const scopes = await scopeResolver.resolveGroupScopes(group.chatId);
@@ -99,11 +101,13 @@ export async function listConfiguredPiwigoGalleryEligibleScopes(
   input: {
     db?: PrismaClient | undefined;
     botProfileId?: string | undefined;
+    botBindingId?: string | undefined;
     piwigoBaseUrl?: string | undefined;
   } = {}
 ): Promise<ConfiguredPiwigoGalleryScope[]> {
   const db = input.db ?? prisma;
   const botProfileId = input.botProfileId ?? resolveBotProfileId();
+  const botBindingId = resolveBotBindingId(input.botBindingId, botProfileId);
   const identity = await db.waIdentity.findFirst({
     where: {
       OR: [
@@ -119,13 +123,13 @@ export async function listConfiguredPiwigoGalleryEligibleScopes(
 
   const records = await db.identityAccessRecord.findMany({
     where: {
-      botProfileId,
+      botBindingId,
       identityId: identity.id,
       active: true,
       sourceKind: { in: [...MANAGED_GROUP_SOURCE_KINDS] },
       group: {
         is: {
-          botProfileId,
+          botBindingId,
           enrollmentStatus: EnrollmentStatus.ENROLLED
         }
       }
@@ -142,7 +146,7 @@ export async function listConfiguredPiwigoGalleryEligibleScopes(
     orderBy: { id: 'asc' }
   });
 
-  const scopeResolver = new PluginScopeResolver(db, botProfileId);
+  const scopeResolver = new PluginScopeResolver(db, botProfileId, botBindingId);
   const groups = uniqueBy(records.flatMap((record) => record.group ? [record.group] : []), (group) => group.id);
   const scopes = new Map<string, ConfiguredPiwigoGalleryScope>();
   for (const group of groups) {

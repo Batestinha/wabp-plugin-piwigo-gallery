@@ -196,7 +196,7 @@ async function completeLinkRequest(
       return { handled: true, text: ctx.t('official.piwigo-gallery.failed', { reason: 'Invalid or expired link request.' }) };
     }
     if (request.whatsappJid !== ctx.message.senderWid) {
-      return { handled: true, text: ctx.t('official.piwigo-gallery.failed', { reason: 'WhatsApp account does not match this link request.' }) };
+      return { handled: true, text: ctx.t('official.piwigo-gallery.failed', { reason: 'WhatsApp identity does not match this link request.' }) };
     }
     const firstScope = request.scopeOptions[0];
     if (!firstScope) {

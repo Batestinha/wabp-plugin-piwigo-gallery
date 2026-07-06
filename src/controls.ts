@@ -48,27 +48,6 @@ export const piwigoGalleryControls: ControlDescriptor[] = [
     ui: { widget: 'toggle' }
   }),
   control({
-    path: 'piwigoBaseUrl',
-    label: 'Piwigo URL',
-    description: 'Base URL for the Piwigo gallery used by this scope.',
-    order: 20,
-    schema: { type: 'string', format: 'url' },
-    ui: { widget: 'url' },
-    dangerous: true,
-    confirmationMessage: 'This changes the gallery destination for uploads in this scope.'
-  }),
-  control({
-    path: 'botSecret',
-    label: 'Bot secret',
-    description: 'Shared secret used by the bot to authenticate with Piwigo.',
-    order: 30,
-    schema: { type: 'secret', format: 'token' },
-    ui: { widget: 'secret' },
-    dangerous: true,
-    sensitive: true,
-    confirmationMessage: 'This changes the credential used to authenticate with Piwigo.'
-  }),
-  control({
     path: 'autoFinalizeMinutes',
     label: 'Auto-finalize minutes',
     description: 'Minutes after the last accepted document before a gallery upload is finalized automatically.',

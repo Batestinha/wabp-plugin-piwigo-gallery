@@ -132,9 +132,9 @@ export class PiwigoGalleryClient {
     } catch {
       throw new Error(`Piwigo returned non-JSON response for ${method}: HTTP ${response.status}`);
     }
-    if (!response.ok || payload.stat !== 'ok') {
-      throw new Error(payload.stat === 'fail' ? (payload.message ?? `Piwigo error ${payload.err ?? response.status}`) : `Piwigo HTTP ${response.status}`);
+    if (payload.stat === 'ok') {
+      return payload.result;
     }
-    return payload.result;
+    throw new Error(payload.message ?? `Piwigo error ${payload.err ?? response.status}`);
   }
 }

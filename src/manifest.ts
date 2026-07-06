@@ -24,8 +24,8 @@ export const piwigoGalleryManifest: PluginManifest = {
     '/send gallery',
     '/upload',
     '/cancel',
-    '/confirm gallery',
-    '/deny gallery',
+    '/accept',
+    '/refuse',
     '/login gallery',
     '/register gallery'
   ],
@@ -47,7 +47,7 @@ export const piwigoGalleryManifest: PluginManifest = {
     ],
     prerequisites: [
       'enabled=true in the target scope.',
-      'The Piwigo base URL and bot secret must be configured before uploads can start.',
+      'The deployment must provide the internal Piwigo base URL and shared bot secret before uploads can start.',
       'Upload users need the scoped piwigo-gallery.upload permission.'
     ],
     workflows: [
@@ -58,7 +58,7 @@ export const piwigoGalleryManifest: PluginManifest = {
       },
       {
         intent: 'gallery_configure',
-        description: 'Configure the Piwigo endpoint and upload limits for the scope.',
+        description: 'Configure upload enablement and upload limits for the scope.',
         commands: ['/gallery configure']
       },
       {
@@ -68,8 +68,8 @@ export const piwigoGalleryManifest: PluginManifest = {
       },
       {
         intent: 'gallery_account',
-        description: 'Confirm, deny, log in, or register a linked gallery account.',
-        commands: ['/confirm gallery', '/deny gallery', '/login gallery', '/register gallery']
+        description: 'Accept, refuse, log in, or register a linked gallery account.',
+        commands: ['/accept', '/refuse', '/login gallery', '/register gallery']
       }
     ]
   }

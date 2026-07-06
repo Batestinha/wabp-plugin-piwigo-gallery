@@ -60,8 +60,11 @@ export interface GalleryScopeOption {
 export interface GalleryLinkRequest {
   requestId: string;
   requestToken: string;
+  phone?: string | undefined;
   whatsappJid: string;
-  piwigoBaseUrl?: string | undefined;
+  whatsappAliases?: string[] | undefined;
+  siteLabel: string;
+  linkChoiceCount: number;
   scopeOptions: GalleryScopeOption[];
   createdAt: string;
   expiresAt: string;
@@ -69,21 +72,64 @@ export interface GalleryLinkRequest {
 
 export async function resolveGalleryConnection(
   _store: PluginDataStore,
-  config?: PiwigoGalleryConfig | undefined
+  config?: PiwigoGalleryConfig | undefined,
+  defaultPiwigoBaseUrl?: string | undefined,
+  defaultPiwigoBotSecret?: string | undefined
 ): Promise<GalleryConnection | undefined> {
-  return config ? configConnection(config) : undefined;
+  return config ? configConnection(config, defaultPiwigoBaseUrl, defaultPiwigoBotSecret) : undefined;
 }
 
 export async function saveLinkRequest(store: PluginDataStore, request: GalleryLinkRequest): Promise<void> {
   await store.set(linkRequestKey(request.requestToken), request);
+  for (const wid of uniqueWids([request.whatsappJid, ...(request.whatsappAliases ?? [])])) {
+    await store.set(linkRequestWidKey(wid), { requestToken: request.requestToken.toUpperCase() });
+  }
+  const phoneDigits = digitsFromPhoneLike(request.phone ?? request.whatsappJid);
+  if (phoneDigits) {
+    await store.set(linkRequestPhoneKey(phoneDigits), { requestToken: request.requestToken.toUpperCase() });
+  }
 }
 
 export function getLinkRequest(store: PluginDataStore, requestToken: string): Promise<GalleryLinkRequest | undefined> {
   return store.get<GalleryLinkRequest>(linkRequestKey(requestToken));
 }
 
+export async function getLinkRequestForWid(store: PluginDataStore, wid: string): Promise<GalleryLinkRequest | undefined> {
+  const index = await store.get<{ requestToken: string }>(linkRequestWidKey(wid));
+  return index?.requestToken ? getLinkRequest(store, index.requestToken) : undefined;
+}
+
+export async function getLinkRequestForWids(store: PluginDataStore, wids: string[]): Promise<GalleryLinkRequest | undefined> {
+  for (const wid of uniqueWids(wids)) {
+    const request = await getLinkRequestForWid(store, wid);
+    if (request) {
+      return request;
+    }
+  }
+  return undefined;
+}
+
+export async function getLinkRequestForPhoneDigits(store: PluginDataStore, phoneDigits: string): Promise<GalleryLinkRequest | undefined> {
+  const normalized = digitsFromPhoneLike(phoneDigits);
+  if (!normalized) {
+    return undefined;
+  }
+  const index = await store.get<{ requestToken: string }>(linkRequestPhoneKey(normalized));
+  return index?.requestToken ? getLinkRequest(store, index.requestToken) : undefined;
+}
+
 export async function deleteLinkRequest(store: PluginDataStore, requestToken: string): Promise<void> {
+  const request = await getLinkRequest(store, requestToken);
   await store.delete(linkRequestKey(requestToken));
+  if (request) {
+    for (const wid of uniqueWids([request.whatsappJid, ...(request.whatsappAliases ?? [])])) {
+      await store.delete(linkRequestWidKey(wid));
+    }
+    const phoneDigits = digitsFromPhoneLike(request.phone ?? request.whatsappJid);
+    if (phoneDigits) {
+      await store.delete(linkRequestPhoneKey(phoneDigits));
+    }
+  }
 }
 
 export async function saveDraft(store: PluginDataStore, draft: GalleryUploadDraft): Promise<void> {
@@ -141,4 +187,28 @@ function activeKey(chatId: string, actorWid: string): string {
 
 function linkRequestKey(requestToken: string): string {
   return `link-request:${requestToken.toUpperCase()}`;
+}
+
+function linkRequestWidKey(wid: string): string {
+  return `link-request-wid:${wid.toLowerCase()}`;
+}
+
+function linkRequestPhoneKey(phoneDigits: string): string {
+  return `link-request-phone:${phoneDigits}`;
+}
+
+function uniqueWids(wids: string[]): string[] {
+  return [...new Set(wids.map((wid) => wid.trim().toLowerCase()).filter(Boolean))];
+}
+
+export function digitsFromPhoneLike(value: string): string {
+  const trimmed = value.trim().toLowerCase();
+  const cUsMatch = trimmed.match(/^(\d+)@c\.us$/);
+  if (cUsMatch?.[1]) {
+    return cUsMatch[1];
+  }
+  if (trimmed.includes('@')) {
+    return '';
+  }
+  return trimmed.replace(/\D/g, '');
 }

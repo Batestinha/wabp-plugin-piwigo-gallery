@@ -43,8 +43,8 @@ export function createGalleryUploadFlowDefinition(input: {
         kind: 'choice',
         prompt: input.t('official.piwigo-gallery.flow.confirm'),
         options: [
-          { label: 'Yes', value: 'yes' },
-          { label: 'No', value: 'no' }
+          { label: input.t('official.piwigo-gallery.flow.yes'), value: 'yes' },
+          { label: input.t('official.piwigo-gallery.flow.no'), value: 'no' }
         ],
         minSelections: 1,
         maxSelections: 1,

@@ -50,7 +50,9 @@ async function handleMessage(
     return [await reply(context, event, 'official.piwigo-gallery.sendAsDocument')];
   }
   if (!context.mediaStore) {
-    return [await reply(context, event, 'official.piwigo-gallery.failed', { reason: 'media runtime unavailable' })];
+    return [await reply(context, event, 'official.piwigo-gallery.failed', {
+      reason: await t(context, event.scopeId, event.actorWid, 'official.piwigo-gallery.error.mediaRuntimeUnavailable')
+    })];
   }
 
   const staged = await context.mediaStore.stageMessage(event.message.id, {
@@ -145,7 +147,12 @@ async function finalizeBatch(
   }
 
   const config = parsePiwigoGalleryConfig(await context.configFor(batch.scopeId, batch.actorWid));
-  const connection = await resolveGalleryConnection(context.dataStore, config);
+  const connection = await resolveGalleryConnection(
+    context.dataStore,
+    config,
+    context.config.PIWIGO_GALLERY_DEFAULT_BASE_URL,
+    context.config.PIWIGO_GALLERY_DEFAULT_BOT_SECRET
+  );
   if (!connection) {
     return failBatch(context, batch, 'Gallery connection is not configured.');
   }
@@ -271,13 +278,13 @@ async function reply(
 
 async function t(
   context: PluginRuntimeContext,
-  _scopeId: string,
+  scopeId: string,
   actorWid: string,
   key: string,
   params: Record<string, string> = {}
 ): Promise<string> {
-  const resolved = await context.i18n.resolveIdentityLocale(actorWid);
-  return context.i18n.translator(resolved.locale, resolved.languagePackScopes)(key, params);
+  const translator = await context.i18n.translatorForIdentity(actorWid, scopeId);
+  return translator(key, params);
 }
 
 function errorMessage(error: unknown): string {

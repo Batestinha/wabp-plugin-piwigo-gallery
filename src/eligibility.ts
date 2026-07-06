@@ -9,7 +9,6 @@ import { resolveRuntimeBindingId, resolveBotProfileId } from '../../../platform/
 import {
   configConnection,
   parsePiwigoGalleryConfig,
-  samePiwigoBaseUrl,
   type GalleryConnection,
   type PiwigoGalleryConfig
 } from './config';
@@ -91,9 +90,14 @@ export interface ConfiguredPiwigoGalleryScope {
   scopeId: string;
   groupId: string;
   groupWid: string;
+  linkChoiceKey: string;
   label: string;
   config: PiwigoGalleryConfig;
   connection: GalleryConnection;
+}
+
+export function linkChoiceCountForScopes(scopes: ConfiguredPiwigoGalleryScope[]): number {
+  return new Set(scopes.map((scope) => scope.linkChoiceKey)).size;
 }
 
 export async function listConfiguredPiwigoGalleryEligibleScopes(
@@ -102,7 +106,8 @@ export async function listConfiguredPiwigoGalleryEligibleScopes(
     db?: PrismaClient | undefined;
     botProfileId?: string | undefined;
     runtimeBindingId?: string | undefined;
-    piwigoBaseUrl?: string | undefined;
+    defaultPiwigoBaseUrl?: string | undefined;
+    defaultPiwigoBotSecret?: string | undefined;
   } = {}
 ): Promise<ConfiguredPiwigoGalleryScope[]> {
   const db = input.db ?? prisma;
@@ -139,7 +144,12 @@ export async function listConfiguredPiwigoGalleryEligibleScopes(
         select: {
           id: true,
           chatId: true,
-          displayName: true
+          displayName: true,
+          communityMetadata: {
+            select: {
+              linkedParentChatId: true
+            }
+          }
         }
       }
     },
@@ -152,17 +162,22 @@ export async function listConfiguredPiwigoGalleryEligibleScopes(
   for (const group of groups) {
     const resolvedScopes = await scopeResolver.resolveGroupScopes(group.chatId);
     for (const resolved of resolvedScopes) {
-      const effective = await resolveEffectivePiwigoGalleryConfig(resolved.scopeId, scopeResolver, db, botProfileId);
+      const effective = await resolveEffectivePiwigoGalleryConfig(
+        resolved.scopeId,
+        scopeResolver,
+        db,
+        botProfileId,
+        input.defaultPiwigoBaseUrl,
+        input.defaultPiwigoBotSecret
+      );
       if (!effective || !effective.config.enabled) {
-        continue;
-      }
-      if (input.piwigoBaseUrl && !samePiwigoBaseUrl(effective.connection.piwigoBaseUrl, input.piwigoBaseUrl)) {
         continue;
       }
       scopes.set(`${resolved.scopeId}:${resolved.groupId}`, {
         scopeId: resolved.scopeId,
         groupId: resolved.groupId,
         groupWid: resolved.groupWid,
+        linkChoiceKey: group.communityMetadata?.linkedParentChatId || group.chatId,
         label: group.displayName || resolved.groupWid,
         config: effective.config,
         connection: effective.connection
@@ -179,7 +194,9 @@ async function resolveEffectivePiwigoGalleryConfig(
   scopeId: string,
   scopeResolver: PluginScopeResolver,
   db: PrismaClient,
-  botProfileId: string
+  botProfileId: string,
+  defaultPiwigoBaseUrl?: string | undefined,
+  defaultPiwigoBotSecret?: string | undefined
 ): Promise<{ config: PiwigoGalleryConfig; connection: GalleryConnection } | undefined> {
   let scopeIds: string[];
   try {
@@ -215,7 +232,7 @@ async function resolveEffectivePiwigoGalleryConfig(
   }
 
   const config = parsePiwigoGalleryConfig(merged);
-  const connection = configConnection(config);
+  const connection = configConnection(config, defaultPiwigoBaseUrl, defaultPiwigoBotSecret);
   return connection ? { config, connection } : undefined;
 }
 

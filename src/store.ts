@@ -10,6 +10,8 @@ export interface GalleryUploadDraft {
   groupWid?: string | undefined;
   chatId: string;
   actorWid: string;
+  actorAliases?: string[] | undefined;
+  piwigoLinkedWid?: string | undefined;
   actorLabel: string;
   acceptedExtensions: string[];
   maxFileBytes: number;
@@ -37,6 +39,8 @@ export interface GalleryUploadBatch {
   groupWid?: string | undefined;
   chatId: string;
   actorWid: string;
+  actorAliases?: string[] | undefined;
+  piwigoLinkedWid?: string | undefined;
   actorLabel: string;
   onde: string;
   quando: string;
@@ -153,7 +157,9 @@ export function getBatch(store: PluginDataStore, scopeId: string, batchId: strin
 }
 
 export async function setActiveBatch(store: PluginDataStore, batch: GalleryUploadBatch): Promise<void> {
-  await store.set(activeKey(batch.chatId, batch.actorWid), { batchId: batch.id }, batch.scopeId);
+  for (const actorWid of batchActorWids(batch)) {
+    await store.set(activeKey(batch.chatId, actorWid), { batchId: batch.id }, batch.scopeId);
+  }
 }
 
 export async function getActiveBatch(
@@ -169,8 +175,29 @@ export async function getActiveBatch(
   return getBatch(store, scopeId, active.batchId);
 }
 
+export async function getActiveBatchForActorWids(
+  store: PluginDataStore,
+  scopeId: string,
+  chatId: string,
+  actorWids: string[]
+): Promise<GalleryUploadBatch | undefined> {
+  for (const actorWid of uniqueWids(actorWids)) {
+    const batch = await getActiveBatch(store, scopeId, chatId, actorWid);
+    if (batch) {
+      return batch;
+    }
+  }
+  return undefined;
+}
+
 export async function clearActiveBatch(store: PluginDataStore, batch: GalleryUploadBatch): Promise<void> {
-  await store.delete(activeKey(batch.chatId, batch.actorWid), batch.scopeId);
+  for (const actorWid of batchActorWids(batch)) {
+    await store.delete(activeKey(batch.chatId, actorWid), batch.scopeId);
+  }
+}
+
+function batchActorWids(batch: Pick<GalleryUploadBatch, 'actorWid' | 'actorAliases'>): string[] {
+  return uniqueWids([batch.actorWid, ...(batch.actorAliases ?? [])]);
 }
 
 function draftKey(flowSessionId: string): string {

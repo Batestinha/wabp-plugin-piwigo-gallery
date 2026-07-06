@@ -21,13 +21,13 @@ import {
   PIWIGO_GALLERY_PERMISSIONS,
   PIWIGO_GALLERY_PLUGIN_ID
 } from './manifest';
-import { PiwigoGalleryClient } from './piwigoClient';
+import { PiwigoGalleryClient, type PiwigoPeopleResult } from './piwigoClient';
 import {
   clearActiveBatch,
   deleteLinkRequest,
   deleteDraft,
   digitsFromPhoneLike,
-  getActiveBatch,
+  getActiveBatchForActorWids,
   getDraft,
   getLinkRequestForPhoneDigits,
   getLinkRequestForWids,
@@ -37,7 +37,10 @@ import {
   setActiveBatch,
   type GalleryUploadBatch
 } from './store';
-import { listConfiguredPiwigoGalleryEligibleScopes } from './eligibility';
+import {
+  listConfiguredPiwigoGalleryEligibleScopes,
+  type ConfiguredPiwigoGalleryScope
+} from './eligibility';
 
 const SCOPE_TARGET: CommandTargetSpec = {
   kind: 'scope',
@@ -150,7 +153,7 @@ export function registerPiwigoGalleryCommands(context: PluginCommandContext): vo
     if (!code) {
       return { handled: true, text: fallbackT('official.piwigo-gallery.loginUsage') };
     }
-    const scopes = await listConfiguredPiwigoGalleryEligibleScopes(ctx.message.senderWid, {
+    const scopes = await configuredPiwigoScopesForCommand(ctx, {
       defaultPiwigoBaseUrl: context.config.PIWIGO_GALLERY_DEFAULT_BASE_URL,
       defaultPiwigoBotSecret: context.config.PIWIGO_GALLERY_DEFAULT_BOT_SECRET
     });
@@ -160,17 +163,21 @@ export function registerPiwigoGalleryCommands(context: PluginCommandContext): vo
     const t = await piwigoCommandTranslator(context, ctx, scopes[0]?.scopeId);
     let lastError: unknown;
     const tried = new Set<string>();
+    const candidateWids = piwigoCandidateWids(ctx);
     for (const scope of scopes) {
       const key = `${scope.connection.piwigoBaseUrl}\n${scope.connection.botSecret}`;
       if (tried.has(key)) {
         continue;
       }
       tried.add(key);
-      try {
-        const result = await new PiwigoGalleryClient(scope.connection).consumeLoginCode(code, ctx.message.senderWid);
-        return { handled: true, text: t('official.piwigo-gallery.loginApproved', { username: result.username }) };
-      } catch (error) {
-        lastError = error;
+      const client = new PiwigoGalleryClient(scope.connection);
+      for (const whatsappJid of candidateWids) {
+        try {
+          const result = await client.consumeLoginCode(code, whatsappJid);
+          return { handled: true, text: t('official.piwigo-gallery.loginApproved', { username: result.username }) };
+        } catch (error) {
+          lastError = error;
+        }
       }
     }
     return { handled: true, text: t('official.piwigo-gallery.failed', { reason: errorMessage(lastError) }) };
@@ -186,7 +193,7 @@ export function registerPiwigoGalleryCommands(context: PluginCommandContext): vo
     if (!username.trim()) {
       return { handled: true, text: fallbackT('official.piwigo-gallery.registerUsage') };
     }
-    const scopes = await listConfiguredPiwigoGalleryEligibleScopes(ctx.message.senderWid, {
+    const scopes = await configuredPiwigoScopesForCommand(ctx, {
       defaultPiwigoBaseUrl: context.config.PIWIGO_GALLERY_DEFAULT_BASE_URL,
       defaultPiwigoBotSecret: context.config.PIWIGO_GALLERY_DEFAULT_BOT_SECRET
     });
@@ -199,7 +206,7 @@ export function registerPiwigoGalleryCommands(context: PluginCommandContext): vo
     }
     const scope = scopes[0]!;
     try {
-      const result = await new PiwigoGalleryClient(scope.connection).registerAccount(username, ctx.message.senderWid, scope.scopeId);
+      const result = await new PiwigoGalleryClient(scope.connection).registerAccount(username, piwigoCandidateWids(ctx)[0] ?? ctx.message.senderWid, scope.scopeId);
       return {
         handled: true,
         text: t(result.pending ? 'official.piwigo-gallery.registeredPending' : 'official.piwigo-gallery.registered', {
@@ -328,6 +335,68 @@ function phoneDigitsForWids(wids: string[]): string {
   return '';
 }
 
+function commandActorWids(ctx: CommandContext): string[] {
+  return uniqueWids([
+    ctx.message.senderWid,
+    ctx.message.authorWid,
+    ctx.actor?.wid,
+    ...(ctx.actor?.aliases ?? [])
+  ]);
+}
+
+function piwigoCandidateWids(ctx: CommandContext): string[] {
+  const wids = commandActorWids(ctx);
+  return [
+    ...wids.filter(isPhoneWid),
+    ...wids.filter((wid) => !isPhoneWid(wid))
+  ];
+}
+
+function isPhoneWid(wid: string): boolean {
+  return /^\d+@c\.us$/i.test(wid.trim());
+}
+
+function uniqueWids(wids: Array<string | null | undefined>): string[] {
+  return [...new Set(wids.map((wid) => wid?.trim().toLowerCase() ?? '').filter(Boolean))];
+}
+
+async function peopleForPiwigoActor(
+  client: PiwigoGalleryClient,
+  candidateWids: string[],
+  scopeId: string
+): Promise<{ whatsappJid: string; peopleResult: PiwigoPeopleResult }> {
+  let lastError: unknown;
+  for (const whatsappJid of candidateWids) {
+    try {
+      return {
+        whatsappJid,
+        peopleResult: await client.people(whatsappJid, scopeId)
+      };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError ?? new Error('WhatsApp account is not linked for this Piwigo scope');
+}
+
+async function configuredPiwigoScopesForCommand(
+  ctx: CommandContext,
+  input: {
+    defaultPiwigoBaseUrl?: string | undefined;
+    defaultPiwigoBotSecret?: string | undefined;
+  }
+): Promise<ConfiguredPiwigoGalleryScope[]> {
+  const scopes = new Map<string, ConfiguredPiwigoGalleryScope>();
+  for (const wid of commandActorWids(ctx)) {
+    for (const scope of await listConfiguredPiwigoGalleryEligibleScopes(wid, input)) {
+      scopes.set(`${scope.scopeId}:${scope.groupId}`, scope);
+    }
+  }
+  return [...scopes.values()].sort((left, right) =>
+    left.label.localeCompare(right.label) || left.scopeId.localeCompare(right.scopeId)
+  );
+}
+
 async function startUploadFlow(context: PluginCommandContext, ctx: CommandContext) {
   const runtime = requireOfficialCommandRuntime(context);
   const scopeId = requireScopeId(ctx);
@@ -348,17 +417,19 @@ async function startUploadFlow(context: PluginCommandContext, ctx: CommandContex
   if (!connection) {
     return { handled: true, text: t('official.piwigo-gallery.notConfigured') };
   }
-  const active = await getActiveBatch(runtime.dataStore, scopeId, ctx.message.chatId, ctx.message.senderWid);
+  const actorWids = commandActorWids(ctx);
+  const active = await getActiveBatchForActorWids(runtime.dataStore, scopeId, ctx.message.chatId, actorWids);
   if (active && (active.status === 'collecting' || active.status === 'uploading')) {
     return { handled: true, text: t('official.piwigo-gallery.uploadAlreadyActive') };
   }
 
   try {
     const client = new PiwigoGalleryClient(connection);
-    const [peopleResult, acceptedTypes] = await Promise.all([
-      client.people(ctx.message.senderWid, scopeId),
+    const [people, acceptedTypes] = await Promise.all([
+      peopleForPiwigoActor(client, piwigoCandidateWids(ctx), scopeId),
       client.acceptedTypes()
     ]);
+    const peopleResult = people.peopleResult;
     if (peopleResult.people.length === 0) {
       return { handled: true, text: t('official.piwigo-gallery.noPeople') };
     }
@@ -377,6 +448,8 @@ async function startUploadFlow(context: PluginCommandContext, ctx: CommandContex
       ...(ctx.groupWid ? { groupWid: ctx.groupWid } : {}),
       chatId: ctx.message.chatId,
       actorWid: ctx.message.senderWid,
+      actorAliases: actorWids,
+      piwigoLinkedWid: people.whatsappJid,
       actorLabel: ctx.message.senderDisplayName ?? ctx.message.senderWid,
       acceptedExtensions: acceptedTypes.extensions,
       maxFileBytes: Math.min(config.maxFileBytes, acceptedTypes.max_file_size ?? config.maxFileBytes),
@@ -436,6 +509,8 @@ function registerUploadFlowCompletionHandler(context: PluginCommandContext, flow
       ...(draft.groupWid ? { groupWid: draft.groupWid } : {}),
       chatId: draft.chatId,
       actorWid: draft.actorWid,
+      ...(draft.actorAliases ? { actorAliases: draft.actorAliases } : {}),
+      ...(draft.piwigoLinkedWid ? { piwigoLinkedWid: draft.piwigoLinkedWid } : {}),
       actorLabel: draft.actorLabel,
       onde: answers.onde,
       quando: answers.quando,
@@ -471,7 +546,7 @@ async function finalizeActiveUpload(context: PluginCommandContext, ctx: CommandC
   const runtime = requireOfficialCommandRuntime(context);
   const scopeId = requireScopeId(ctx);
   const t = await piwigoCommandTranslator(context, ctx, scopeId);
-  const batch = await getActiveBatch(runtime.dataStore, scopeId, ctx.message.chatId, ctx.message.senderWid);
+  const batch = await getActiveBatchForActorWids(runtime.dataStore, scopeId, ctx.message.chatId, commandActorWids(ctx));
   if (!batch || batch.status !== 'collecting') {
     return { handled: true, text: t('official.piwigo-gallery.noActiveUpload') };
   }
@@ -496,7 +571,7 @@ async function cancelActiveUpload(context: PluginCommandContext, ctx: CommandCon
   const runtime = requireOfficialCommandRuntime(context);
   const scopeId = requireScopeId(ctx);
   const t = await piwigoCommandTranslator(context, ctx, scopeId);
-  const batch = await getActiveBatch(runtime.dataStore, scopeId, ctx.message.chatId, ctx.message.senderWid);
+  const batch = await getActiveBatchForActorWids(runtime.dataStore, scopeId, ctx.message.chatId, commandActorWids(ctx));
   if (!batch || (batch.status !== 'collecting' && batch.status !== 'uploading')) {
     return { handled: true, text: t('official.piwigo-gallery.noActiveUpload') };
   }

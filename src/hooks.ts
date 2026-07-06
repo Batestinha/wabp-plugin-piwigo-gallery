@@ -10,7 +10,7 @@ import { PIWIGO_GALLERY_FINALIZE_JOB, PIWIGO_GALLERY_PLUGIN_ID } from './manifes
 import { PiwigoGalleryClient } from './piwigoClient';
 import {
   clearActiveBatch,
-  getActiveBatch,
+  getActiveBatchForActorWids,
   getBatch,
   resolveGalleryConnection,
   saveBatch,
@@ -39,7 +39,7 @@ async function handleMessage(
   if (!config.enabled || event.isCommandLike) {
     return;
   }
-  const batch = await getActiveBatch(context.dataStore, event.scopeId, event.message.chatId, event.actorWid);
+  const batch = await getActiveBatchForActorWids(context.dataStore, event.scopeId, event.message.chatId, eventActorWids(event));
   if (!batch || batch.status !== 'collecting') {
     return;
   }
@@ -175,7 +175,7 @@ async function finalizeBatch(
     }
     try {
       const result = await client.uploadForJid({
-        whatsappJid: batch.actorWid,
+        whatsappJid: batch.piwigoLinkedWid ?? batch.actorWid,
         scopeId: batch.scopeId,
         onde: batch.onde,
         quando: batch.quando,
@@ -229,6 +229,14 @@ async function failBatch(
     chatId: batch.chatId,
     text: await t(context, batch.scopeId, batch.actorWid, 'official.piwigo-gallery.failed', { reason })
   }];
+}
+
+function eventActorWids(event: PluginMessageEvent): string[] {
+  return uniqueWids([event.actorWid, event.message.senderWid, event.message.authorWid, ...(event.actorAliases ?? [])]);
+}
+
+function uniqueWids(wids: Array<string | null | undefined>): string[] {
+  return [...new Set(wids.map((wid) => wid?.trim().toLowerCase() ?? '').filter(Boolean))];
 }
 
 function batchIdFromPayload(payload: unknown): string | undefined {

@@ -275,9 +275,6 @@ async function failBatch(
   batch.updatedAt = new Date().toISOString();
   await saveBatch(context.dataStore, batch);
   await clearActiveBatch(context.dataStore, batch);
-  for (const file of batch.files.filter((entry) => entry.status === 'staged')) {
-    await context.mediaStore?.delete(file.mediaId).catch(() => undefined);
-  }
   return [{
     type: 'message.sendText',
     chatId: batch.chatId,

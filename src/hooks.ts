@@ -18,6 +18,8 @@ import {
   type GalleryUploadBatch
 } from './store';
 
+const batchMutationLocks = new Map<string, Promise<unknown>>();
+
 export function createPiwigoGalleryHooks(context: PluginRuntimeContext): PluginRuntimeHooks {
   return {
     async onMessage(event) {
@@ -69,19 +71,18 @@ async function handleMessage(
     return [await reply(context, event, key)];
   }
 
-  const now = new Date();
-  const autoFinalizeAt = new Date(now.getTime() + batch.autoFinalizeMinutes * 60_000);
-  batch.files.push({
+  const file: GalleryBatchFile = {
     mediaId: staged.media.id,
     messageId: event.message.id,
     filename: staged.media.filename,
     mimeType: staged.media.mimeType,
     sizeBytes: staged.media.sizeBytes,
     status: 'staged'
-  });
-  batch.updatedAt = now.toISOString();
-  batch.autoFinalizeAt = autoFinalizeAt.toISOString();
-  await saveBatch(context.dataStore, batch);
+  };
+  const append = await appendStagedFile(context, event, batch.id, file);
+  if (!append || append.duplicate) {
+    return;
+  }
 
   return [
     {
@@ -89,7 +90,7 @@ async function handleMessage(
       chatId: event.message.chatId,
       quotedMessageId: event.message.id,
       text: await t(context, event.scopeId, event.actorWid, 'official.piwigo-gallery.documentStaged', {
-        count: String(batch.files.length)
+        count: String(append.fileCount)
       })
     },
     {
@@ -97,10 +98,63 @@ async function handleMessage(
       pluginId: PIWIGO_GALLERY_PLUGIN_ID,
       jobName: PIWIGO_GALLERY_FINALIZE_JOB,
       scopeId: event.scopeId,
-      runAt: autoFinalizeAt,
+      runAt: append.autoFinalizeAt,
       payload: { batchId: batch.id }
     }
   ];
+}
+
+async function appendStagedFile(
+  context: PluginRuntimeContext,
+  event: PluginMessageEvent,
+  batchId: string,
+  file: GalleryBatchFile
+): Promise<{ fileCount: number; autoFinalizeAt: Date; duplicate: boolean } | undefined> {
+  const lockKey = `${event.scopeId}:${batchId}`;
+  return withBatchMutationLock(lockKey, async () => {
+    const batch = await getBatch(context.dataStore, event.scopeId, batchId);
+    if (!batch || batch.status !== 'collecting') {
+      await context.mediaStore?.delete(file.mediaId).catch(() => undefined);
+      return undefined;
+    }
+    if (batch.files.some((existing) => existing.messageId === file.messageId)) {
+      await context.mediaStore?.delete(file.mediaId).catch(() => undefined);
+      return {
+        fileCount: batch.files.length,
+        autoFinalizeAt: new Date(batch.autoFinalizeAt),
+        duplicate: true
+      };
+    }
+
+    const now = new Date();
+    const autoFinalizeAt = new Date(now.getTime() + batch.autoFinalizeMinutes * 60_000);
+    batch.files.push(file);
+    batch.updatedAt = now.toISOString();
+    batch.autoFinalizeAt = autoFinalizeAt.toISOString();
+    await saveBatch(context.dataStore, batch);
+    return {
+      fileCount: batch.files.length,
+      autoFinalizeAt,
+      duplicate: false
+    };
+  });
+}
+
+async function withBatchMutationLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
+  const previous = batchMutationLocks.get(key) ?? Promise.resolve();
+  let current!: Promise<T>;
+  current = (async () => {
+    await previous.catch(() => undefined);
+    try {
+      return await operation();
+    } finally {
+      if (batchMutationLocks.get(key) === current) {
+        batchMutationLocks.delete(key);
+      }
+    }
+  })();
+  batchMutationLocks.set(key, current);
+  return current;
 }
 
 async function finalizeBatch(

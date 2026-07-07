@@ -6,7 +6,10 @@ export const PIWIGO_GALLERY_DEFAULT_BOT_SECRET_ENV = 'PIWIGO_GALLERY_DEFAULT_BOT
 export const piwigoGalleryConfigSchema = z.object({
   enabled: z.boolean().default(false),
   autoFinalizeMinutes: z.number().int().min(1).max(24 * 60).default(30),
-  maxFileBytes: z.number().int().positive().max(25 * 1024 * 1024 * 1024).default(512 * 1024 * 1024)
+  maxFileBytes: z.number().int().positive().max(25 * 1024 * 1024 * 1024).default(512 * 1024 * 1024),
+  newAlbumAnnouncementsEnabled: z.boolean().default(false),
+  announcementGroupWid: z.string().trim().regex(/^[^\s@]+@g\.us$/i).or(z.literal('')).default(''),
+  newAlbumAnnouncementDelayMinutes: z.number().int().min(1).max(24 * 60).default(120)
 }).strip();
 
 export type PiwigoGalleryConfig = z.infer<typeof piwigoGalleryConfigSchema>;

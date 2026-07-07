@@ -62,5 +62,29 @@ export const piwigoGalleryControls: ControlDescriptor[] = [
     order: 50,
     schema: { type: 'number', unit: 'bytes', min: 1, max: 25 * 1024 * 1024 * 1024 },
     ui: { widget: 'number' }
+  }),
+  control({
+    path: 'newAlbumAnnouncementsEnabled',
+    label: 'New album announcements',
+    description: 'Announce newly populated Piwigo albums to a WhatsApp group.',
+    order: 70,
+    schema: { type: 'boolean' },
+    ui: { widget: 'toggle' }
+  }),
+  control({
+    path: 'announcementGroupWid',
+    label: 'Announcement group',
+    description: 'WhatsApp group JID inside this scope where new album announcements are sent.',
+    order: 80,
+    schema: { type: 'string' },
+    ui: { widget: 'entity-picker', label: 'Group' }
+  }),
+  control({
+    path: 'newAlbumAnnouncementDelayMinutes',
+    label: 'Announcement delay',
+    description: 'Minutes after Piwigo reports a new album upload before the WhatsApp album announcement is sent.',
+    order: 90,
+    schema: { type: 'number', min: 1, max: 1440 },
+    ui: { widget: 'number' }
   })
 ];

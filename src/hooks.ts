@@ -6,14 +6,18 @@ import type {
 import type { PluginRuntimeContext } from '../../../platform/pluginRuntime/runtime/pluginRuntimeContext';
 import type { PluginAction } from '../../../platform/pluginRuntime/runtime/pluginActionTypes';
 import { parsePiwigoGalleryConfig } from './config';
-import { PIWIGO_GALLERY_FINALIZE_JOB, PIWIGO_GALLERY_PLUGIN_ID } from './manifest';
+import { PIWIGO_GALLERY_ANNOUNCE_NEW_ALBUM_JOB, PIWIGO_GALLERY_FINALIZE_JOB, PIWIGO_GALLERY_PLUGIN_ID } from './manifest';
 import { PiwigoGalleryClient } from './piwigoClient';
 import {
   clearActiveBatch,
+  getAlbumAnnouncement,
   getActiveBatchForActorWids,
   getBatch,
   resolveGalleryConnection,
+  saveAlbumAnnouncement,
   saveBatch,
+  type PiwigoAlbumAnnouncement,
+  type PiwigoAlbumAnnouncementFile,
   type GalleryBatchFile,
   type GalleryUploadBatch
 } from './store';
@@ -28,6 +32,9 @@ export function createPiwigoGalleryHooks(context: PluginRuntimeContext): PluginR
     async onPluginJob(job) {
       if (job.jobName === PIWIGO_GALLERY_FINALIZE_JOB) {
         return finalizeBatch(context, job);
+      }
+      if (job.jobName === PIWIGO_GALLERY_ANNOUNCE_NEW_ALBUM_JOB) {
+        return announceNewAlbum(context, job);
       }
     }
   };
@@ -282,6 +289,108 @@ async function failBatch(
   }];
 }
 
+async function announceNewAlbum(
+  context: PluginRuntimeContext,
+  job: PluginJobEvent
+): Promise<PluginAction[] | void> {
+  const announcementId = announcementIdFromPayload(job.payload);
+  if (!announcementId) {
+    return [{ type: 'audit.record', action: 'piwigo-gallery.announce.skipped', metadataJson: { reason: 'missing announcementId' } }];
+  }
+  const announcement = await getAlbumAnnouncement(context.dataStore, job.scopeId, announcementId);
+  if (!announcement || announcement.status !== 'pending') {
+    return;
+  }
+
+  const config = parsePiwigoGalleryConfig(await context.configFor(announcement.scopeId));
+  const announcementGroupWid = job.groupWid ?? config.announcementGroupWid;
+  if (!config.newAlbumAnnouncementsEnabled || !announcementGroupWid) {
+    await markAnnouncement(context, announcement, 'skipped', 'New album announcements are not configured.');
+    return [{ type: 'audit.record', action: 'piwigo-gallery.announce.skipped', metadataJson: { announcementId, reason: 'not configured' } }];
+  }
+
+  const selected = selectAnnouncementFiles(announcement.files);
+  if (selected.length === 0) {
+    await markAnnouncement(context, announcement, 'skipped', 'No supported image or video files were provided.');
+    return [{ type: 'audit.record', action: 'piwigo-gallery.announce.skipped', metadataJson: { announcementId, reason: 'no supported media' } }];
+  }
+
+  const connection = await resolveGalleryConnection(
+    context.dataStore,
+    config,
+    context.config.PIWIGO_GALLERY_DEFAULT_BASE_URL,
+    context.config.PIWIGO_GALLERY_DEFAULT_BOT_SECRET
+  );
+  if (!connection) {
+    await markAnnouncement(context, announcement, 'failed', 'Gallery connection is not configured.');
+    return [{ type: 'audit.record', action: 'piwigo-gallery.announce.failed', metadataJson: { announcementId, reason: 'connection not configured' } }];
+  }
+
+  try {
+    const client = new PiwigoGalleryClient(connection);
+    const files = await Promise.all(selected.map((file) => client.downloadForBot({
+      ...(file.imageId !== undefined ? { imageId: file.imageId } : {}),
+      ...(file.fileId ? { fileId: file.fileId } : {}),
+      ...(file.downloadToken ? { downloadToken: file.downloadToken } : {})
+    })));
+    const caption = `New album ${announcement.albumName} added to ${announcement.siteLabel} by ${announcement.userDisplayName}`;
+    announcement.status = 'announced';
+    announcement.announcedAt = new Date().toISOString();
+    await saveAlbumAnnouncement(context.dataStore, announcement);
+    return files.map((file, index) => ({
+      type: 'message.sendMedia' as const,
+      chatId: announcementGroupWid,
+      file: {
+        filename: file.filename,
+        mimeType: file.mimeType,
+        buffer: file.buffer
+      },
+      ...(index === 0 ? { caption } : {}),
+      waitUntilMsgSent: true
+    }));
+  } catch (error) {
+    const reason = errorMessage(error);
+    await markAnnouncement(context, announcement, 'failed', reason);
+    return [{ type: 'audit.record', action: 'piwigo-gallery.announce.failed', metadataJson: { announcementId, reason } }];
+  }
+}
+
+async function markAnnouncement(
+  context: PluginRuntimeContext,
+  announcement: PiwigoAlbumAnnouncement,
+  status: PiwigoAlbumAnnouncement['status'],
+  error: string
+): Promise<void> {
+  announcement.status = status;
+  announcement.error = error;
+  await saveAlbumAnnouncement(context.dataStore, announcement);
+}
+
+function selectAnnouncementFiles(files: PiwigoAlbumAnnouncementFile[]): PiwigoAlbumAnnouncementFile[] {
+  const candidates = files.filter((file) => isSupportedAnnouncementMedia(file) && hasDownloadReference(file));
+  const videos = candidates.filter((file) => isVideoMime(file.mimeType));
+  const videoSlots = Math.min(2, videos.length);
+  const imageSlots = 5 - videoSlots;
+  const selected = new Set<PiwigoAlbumAnnouncementFile>([
+    ...videos.slice(0, videoSlots),
+    ...candidates.filter((file) => !isVideoMime(file.mimeType)).slice(0, imageSlots)
+  ]);
+  return candidates.filter((file) => selected.has(file)).slice(0, 5);
+}
+
+function isSupportedAnnouncementMedia(file: Pick<PiwigoAlbumAnnouncementFile, 'mimeType'>): boolean {
+  const mimeType = file.mimeType.toLowerCase();
+  return mimeType.startsWith('image/') || mimeType.startsWith('video/');
+}
+
+function isVideoMime(mimeType: string): boolean {
+  return mimeType.toLowerCase().startsWith('video/');
+}
+
+function hasDownloadReference(file: PiwigoAlbumAnnouncementFile): boolean {
+  return file.imageId !== undefined || Boolean(file.fileId || file.downloadToken);
+}
+
 function eventActorWids(event: PluginMessageEvent): string[] {
   return uniqueWids([event.actorWid, event.message.senderWid, event.message.authorWid, ...(event.actorAliases ?? [])]);
 }
@@ -298,6 +407,12 @@ function batchIdFromPayload(payload: unknown): string | undefined {
 
 function forcedFromPayload(payload: unknown): boolean {
   return typeof payload === 'object' && payload !== null && 'forced' in payload && (payload as { forced?: unknown }).forced === true;
+}
+
+function announcementIdFromPayload(payload: unknown): string | undefined {
+  return typeof payload === 'object' && payload !== null && 'announcementId' in payload && typeof (payload as { announcementId?: unknown }).announcementId === 'string'
+    ? (payload as { announcementId: string }).announcementId
+    : undefined;
 }
 
 function fallbackFilename(mimeType: string | undefined): string | undefined {

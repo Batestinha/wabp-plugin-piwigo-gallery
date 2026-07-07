@@ -73,7 +73,10 @@ export function registerPiwigoGalleryCommands(context: PluginCommandContext): vo
         enabled: String(config.enabled),
         url: connection?.piwigoBaseUrl ?? resolvePiwigoBaseUrl(context.config.PIWIGO_GALLERY_DEFAULT_BASE_URL),
         auto: String(config.autoFinalizeMinutes),
-        max: String(config.maxFileBytes)
+        max: String(config.maxFileBytes),
+        announceEnabled: String(config.newAlbumAnnouncementsEnabled),
+        announcementGroup: config.announcementGroupWid || '',
+        announcementDelay: String(config.newAlbumAnnouncementDelayMinutes)
       })
     };
   });
@@ -98,6 +101,12 @@ export function registerPiwigoGalleryCommands(context: PluginCommandContext): vo
     await runtime.setConfig(scopeId, next);
     return { handled: true, text: t('official.piwigo-gallery.configUpdated') };
   });
+
+  router.register('gallery', 'download', galleryDownloadCommand({
+    auditAction: 'piwigo-gallery.download',
+    usage: '/gallery download image 123',
+    descriptionKey: 'official.piwigo-gallery.help.download'
+  }), async (ctx) => downloadGalleryFile(context, ctx));
 
   router.register('send', 'gallery', galleryUploadCommand({
     auditAction: 'piwigo-gallery.upload.start',
@@ -397,6 +406,57 @@ async function configuredPiwigoScopesForCommand(
   );
 }
 
+async function downloadGalleryFile(context: PluginCommandContext, ctx: CommandContext) {
+  const runtime = requireOfficialCommandRuntime(context);
+  const scopeId = requireScopeId(ctx);
+  const t = await piwigoCommandTranslator(context, ctx, scopeId);
+  const reference = parseDownloadReference(ctx.remainingArgs ?? ctx.command.args);
+  if (!reference) {
+    return { handled: true, text: t('official.piwigo-gallery.downloadUsage') };
+  }
+  const config = parsePiwigoGalleryConfig(await runtime.configFor(scopeId, ctx.message.senderWid));
+  if (!config.enabled) {
+    return { handled: true, text: t('official.piwigo-gallery.disabled') };
+  }
+  if (ctx.managementMode === 'OBSERVE') {
+    return { handled: true, text: t('official.piwigo-gallery.observeOnly') };
+  }
+  const connection = await resolveGalleryConnection(
+    runtime.dataStore,
+    config,
+    context.config.PIWIGO_GALLERY_DEFAULT_BASE_URL,
+    context.config.PIWIGO_GALLERY_DEFAULT_BOT_SECRET
+  );
+  if (!connection) {
+    return { handled: true, text: t('official.piwigo-gallery.notConfigured') };
+  }
+
+  try {
+    const client = new PiwigoGalleryClient(connection);
+    const actor = await peopleForPiwigoActor(client, piwigoCandidateWids(ctx), scopeId);
+    const file = await client.downloadForBot({
+      ...reference,
+      whatsappJid: actor.whatsappJid,
+      scopeId
+    });
+    return {
+      handled: true,
+      pluginActions: [{
+        type: 'message.sendDocument' as const,
+        chatId: ctx.message.chatId,
+        file: {
+          filename: file.filename,
+          mimeType: file.mimeType,
+          buffer: file.buffer
+        },
+        quotedMessageId: ctx.message.id
+      }]
+    };
+  } catch (error) {
+    return { handled: true, text: t('official.piwigo-gallery.failed', { reason: errorMessage(error) }) };
+  }
+}
+
 async function startUploadFlow(context: PluginCommandContext, ctx: CommandContext) {
   const runtime = requireOfficialCommandRuntime(context);
   const scopeId = requireScopeId(ctx);
@@ -632,6 +692,29 @@ function galleryUploadCommand(input: {
   };
 }
 
+function galleryDownloadCommand(input: {
+  auditAction: string;
+  usage: string;
+  descriptionKey: string;
+}): CommandMetadata {
+  return {
+    plane: 'group_operation',
+    interaction: 'group_same_chat',
+    pluginId: PIWIGO_GALLERY_PLUGIN_ID,
+    permission: PIWIGO_GALLERY_PERMISSIONS.download,
+    requiresManagedGroup: true,
+    targets: [SCOPE_TARGET],
+    mutation: 'durable',
+    auditAction: input.auditAction,
+    assistant: galleryAssistantMetadata(input.usage, 'durable'),
+    help: {
+      familyKey: 'official.piwigo-gallery.help.family',
+      descriptionKey: input.descriptionKey,
+      usage: input.usage
+    }
+  };
+}
+
 function galleryAuthCommand(input: {
   auditAction: string;
   usage: string;
@@ -699,6 +782,73 @@ function parseConfigPatch(args: string[]): Record<string, unknown> | undefined {
     }
   }
   return patch;
+}
+
+function parseDownloadReference(args: string[]): {
+  imageId?: number | undefined;
+  fileId?: string | undefined;
+  downloadToken?: string | undefined;
+} | undefined {
+  const tokens = args.map((arg) => arg.trim()).filter(Boolean);
+  if (tokens.length === 0) {
+    return undefined;
+  }
+  const joined = tokens.join(' ');
+  if (/^https?:\/\//i.test(joined)) {
+    const fromUrl = parseDownloadReferenceUrl(joined);
+    if (fromUrl) {
+      return fromUrl;
+    }
+  }
+  const first = tokens[0] ?? '';
+  const [inlineKey, inlineValue] = first.includes('=') ? first.split('=', 2) : ['', ''];
+  const kind = (inlineKey || first).toLowerCase().replace(/[-_]/g, '');
+  const value = inlineValue || tokens[1] || first;
+  switch (kind) {
+    case 'image':
+    case 'imageid':
+    case 'id':
+      return imageDownloadReference(value);
+    case 'file':
+    case 'fileid':
+      return value ? { fileId: value } : undefined;
+    case 'token':
+    case 'downloadtoken':
+      return value ? { downloadToken: value } : undefined;
+    default:
+      return tokens.length === 1 ? imageDownloadReference(first) : undefined;
+  }
+}
+
+function parseDownloadReferenceUrl(input: string): {
+  imageId?: number | undefined;
+  fileId?: string | undefined;
+  downloadToken?: string | undefined;
+} | undefined {
+  try {
+    const url = new URL(input);
+    return imageDownloadReference(url.searchParams.get('image_id') ?? url.searchParams.get('imageId') ?? url.searchParams.get('id') ?? '')
+      ?? stringDownloadReference('fileId', url.searchParams.get('file_id') ?? url.searchParams.get('fileId') ?? '')
+      ?? stringDownloadReference('downloadToken', url.searchParams.get('download_token') ?? url.searchParams.get('downloadToken') ?? url.searchParams.get('token') ?? '');
+  } catch {
+    return undefined;
+  }
+}
+
+function imageDownloadReference(input: string): { imageId: number } | undefined {
+  const imageId = Number(input);
+  return Number.isSafeInteger(imageId) && imageId > 0 ? { imageId } : undefined;
+}
+
+function stringDownloadReference(
+  key: 'fileId' | 'downloadToken',
+  value: string
+): { fileId: string } | { downloadToken: string } | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return key === 'fileId' ? { fileId: trimmed } : { downloadToken: trimmed };
 }
 
 function errorMessage(error: unknown): string {

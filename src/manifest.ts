@@ -4,10 +4,12 @@ import { piwigoGalleryMessages } from './messages';
 
 export const PIWIGO_GALLERY_PLUGIN_ID = 'official.piwigo-gallery';
 export const PIWIGO_GALLERY_FINALIZE_JOB = 'piwigo-gallery.finalize';
+export const PIWIGO_GALLERY_ANNOUNCE_NEW_ALBUM_JOB = 'piwigo-gallery.announce-new-album';
 
 export const PIWIGO_GALLERY_PERMISSIONS = {
   configure: 'piwigo-gallery.configure',
-  upload: 'piwigo-gallery.upload'
+  upload: 'piwigo-gallery.upload',
+  download: 'piwigo-gallery.download'
 } as const;
 
 export const piwigoGalleryManifest: PluginManifest = {
@@ -21,6 +23,7 @@ export const piwigoGalleryManifest: PluginManifest = {
   commands: [
     '/gallery status',
     '/gallery configure',
+    '/gallery download',
     '/send gallery',
     '/upload',
     '/cancel',
@@ -32,23 +35,26 @@ export const piwigoGalleryManifest: PluginManifest = {
   eventSubscriptions: ['message', 'plugin.job'],
   requiredPermissions: [
     PIWIGO_GALLERY_PERMISSIONS.configure,
-    PIWIGO_GALLERY_PERMISSIONS.upload
+    PIWIGO_GALLERY_PERMISSIONS.upload,
+    PIWIGO_GALLERY_PERMISSIONS.download
   ],
   requiredBotCapabilities: [],
   configSchema: piwigoGalleryConfigSchema,
   dangerousActions: [],
-  backgroundJobs: [PIWIGO_GALLERY_FINALIZE_JOB],
+  backgroundJobs: [PIWIGO_GALLERY_FINALIZE_JOB, PIWIGO_GALLERY_ANNOUNCE_NEW_ALBUM_JOB],
   assistant: {
     summary: 'Piwigo gallery upload workflow for collecting WhatsApp documents, linking users, and finalizing gallery batches.',
     useCases: [
       'Explain whether gallery uploads are configured for the current scope.',
       'Start and manage a guided gallery upload flow.',
+      'Download a Piwigo media file into WhatsApp.',
       'Help users link or register a Piwigo account.'
     ],
     prerequisites: [
       'enabled=true in the target scope.',
       'The deployment must provide the internal Piwigo base URL and shared bot secret before uploads can start.',
-      'Upload users need the scoped piwigo-gallery.upload permission.'
+      'Upload users need the scoped piwigo-gallery.upload permission.',
+      'Download users need the scoped piwigo-gallery.download permission.'
     ],
     workflows: [
       {
@@ -65,6 +71,11 @@ export const piwigoGalleryManifest: PluginManifest = {
         intent: 'gallery_upload',
         description: 'Start, finalize, or cancel a guided gallery upload batch.',
         commands: ['/send gallery', '/upload', '/cancel']
+      },
+      {
+        intent: 'gallery_download',
+        description: 'Download a gallery file into WhatsApp.',
+        commands: ['/gallery download']
       },
       {
         intent: 'gallery_account',

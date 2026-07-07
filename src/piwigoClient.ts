@@ -36,6 +36,12 @@ export interface PiwigoUploadResult {
   username?: string;
 }
 
+export interface PiwigoDownloadForBotResult {
+  filename: string;
+  mime_type: string;
+  content_base64: string;
+}
+
 type PiwigoResponse<T> =
   | { stat: 'ok'; result: T }
   | { stat: 'fail'; err?: number; message?: string };
@@ -104,6 +110,27 @@ export class PiwigoGalleryClient {
     const blob = new Blob([new Uint8Array(input.buffer)], { type: input.mimeType });
     form.set('image', blob, input.filename);
     return this.request<PiwigoUploadResult>('wabp.piwigo.media.uploadForJid', form);
+  }
+
+  async downloadForBot(input: {
+    imageId?: number | undefined;
+    fileId?: string | undefined;
+    downloadToken?: string | undefined;
+    whatsappJid?: string | undefined;
+    scopeId?: string | undefined;
+  }): Promise<{ filename: string; mimeType: string; buffer: Buffer }> {
+    const result = await this.post<PiwigoDownloadForBotResult>('wabp.piwigo.media.downloadForBot', {
+      ...(input.imageId !== undefined ? { image_id: input.imageId } : {}),
+      ...(input.fileId ? { file_id: input.fileId } : {}),
+      ...(input.downloadToken ? { download_token: input.downloadToken } : {}),
+      ...(input.whatsappJid ? { whatsapp_jid: input.whatsappJid } : {}),
+      ...(input.scopeId ? { scope_id: input.scopeId } : {})
+    });
+    return {
+      filename: result.filename,
+      mimeType: result.mime_type,
+      buffer: Buffer.from(result.content_base64, 'base64')
+    };
   }
 
   private post<T>(method: string, fields: Record<string, string | number | boolean>): Promise<T> {

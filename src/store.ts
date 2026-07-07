@@ -74,6 +74,30 @@ export interface GalleryLinkRequest {
   expiresAt: string;
 }
 
+export interface PiwigoAlbumAnnouncementFile {
+  imageId?: number | undefined;
+  fileId?: string | undefined;
+  downloadToken?: string | undefined;
+  filename: string;
+  mimeType: string;
+}
+
+export interface PiwigoAlbumAnnouncement {
+  id: string;
+  dedupeKey: string;
+  scopeId: string;
+  albumId?: string | undefined;
+  albumName: string;
+  siteLabel: string;
+  userDisplayName: string;
+  files: PiwigoAlbumAnnouncementFile[];
+  observedAt: string;
+  announceAt: string;
+  status: 'pending' | 'announced' | 'skipped' | 'failed';
+  error?: string | undefined;
+  announcedAt?: string | undefined;
+}
+
 export async function resolveGalleryConnection(
   _store: PluginDataStore,
   config?: PiwigoGalleryConfig | undefined,
@@ -196,6 +220,28 @@ export async function clearActiveBatch(store: PluginDataStore, batch: GalleryUpl
   }
 }
 
+export async function saveAlbumAnnouncement(store: PluginDataStore, announcement: PiwigoAlbumAnnouncement): Promise<void> {
+  await store.set(albumAnnouncementKey(announcement.id), announcement, announcement.scopeId);
+  await store.set(albumAnnouncementDedupeKey(announcement.dedupeKey), { announcementId: announcement.id }, announcement.scopeId);
+}
+
+export function getAlbumAnnouncement(
+  store: PluginDataStore,
+  scopeId: string,
+  announcementId: string
+): Promise<PiwigoAlbumAnnouncement | undefined> {
+  return store.get<PiwigoAlbumAnnouncement>(albumAnnouncementKey(announcementId), scopeId);
+}
+
+export async function getAlbumAnnouncementByDedupeKey(
+  store: PluginDataStore,
+  scopeId: string,
+  dedupeKey: string
+): Promise<PiwigoAlbumAnnouncement | undefined> {
+  const index = await store.get<{ announcementId: string }>(albumAnnouncementDedupeKey(dedupeKey), scopeId);
+  return index?.announcementId ? getAlbumAnnouncement(store, scopeId, index.announcementId) : undefined;
+}
+
 function batchActorWids(batch: Pick<GalleryUploadBatch, 'actorWid' | 'actorAliases'>): string[] {
   return uniqueWids([batch.actorWid, ...(batch.actorAliases ?? [])]);
 }
@@ -210,6 +256,14 @@ function batchKey(batchId: string): string {
 
 function activeKey(chatId: string, actorWid: string): string {
   return `active-upload:${chatId}:${actorWid}`;
+}
+
+function albumAnnouncementKey(announcementId: string): string {
+  return `album-announcement:${announcementId}`;
+}
+
+function albumAnnouncementDedupeKey(dedupeKey: string): string {
+  return `album-announcement-dedupe:${dedupeKey}`;
 }
 
 function linkRequestKey(requestToken: string): string {

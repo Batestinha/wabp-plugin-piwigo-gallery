@@ -11,6 +11,7 @@ export function createGalleryUploadFlowDefinition(input: {
   const flowType = `official.piwigo-gallery.upload.${randomUUID()}`;
   return {
     flowType,
+    t: input.t,
     initialStepId: 'onde',
     context: 'group',
     timeoutMinutes: 30,

@@ -47,6 +47,9 @@ async function handleMessage(
   context: PluginRuntimeContext,
   event: PluginMessageEvent
 ): Promise<PluginAction[] | void> {
+  if (event.message.fromMe) {
+    return;
+  }
   const config = parsePiwigoGalleryConfig(await context.configFor(event.scopeId, event.actorWid));
   if (!config.enabled || event.isCommandLike) {
     return;

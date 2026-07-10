@@ -485,14 +485,16 @@ async function startUploadFlow(context: PluginCommandContext, ctx: CommandContex
 
   try {
     const client = new PiwigoGalleryClient(connection);
-    const [people, acceptedTypes] = await Promise.all([
-      peopleForPiwigoActor(client, piwigoCandidateWids(ctx), scopeId),
-      client.acceptedTypes()
-    ]);
+    const people = await peopleForPiwigoActor(client, piwigoCandidateWids(ctx), scopeId)
+      .catch(() => undefined);
+    if (!people) {
+      return { handled: true, text: uploadAccountRequiredMessage(t, config) };
+    }
     const peopleResult = people.peopleResult;
     if (peopleResult.people.length === 0) {
-      return { handled: true, text: t('official.piwigo-gallery.noPeople') };
+      return { handled: true, text: uploadAccountRequiredMessage(t, config) };
     }
+    const acceptedTypes = await client.acceptedTypes();
     const definition = createGalleryUploadFlowDefinition({ t, people: peopleResult.people });
     registerUploadFlowCompletionHandler(context, definition.flowType, t);
     const flowSessionId = await context.flowEngine.startFlow({
@@ -520,6 +522,19 @@ async function startUploadFlow(context: PluginCommandContext, ctx: CommandContex
   } catch (error) {
     return { handled: true, text: t('official.piwigo-gallery.failed', { reason: errorMessage(error) }) };
   }
+}
+
+function uploadAccountRequiredMessage(
+  t: TranslateFn,
+  config: ReturnType<typeof parsePiwigoGalleryConfig>
+): string {
+  const key = config.accountProfileUrl
+    ? 'official.piwigo-gallery.accountRequiredWithProfileUrl'
+    : 'official.piwigo-gallery.accountRequired';
+  return t(key, {
+    accountLabel: config.accountCreationLabel,
+    profileUrl: config.accountProfileUrl
+  });
 }
 
 async function connectionForScope(

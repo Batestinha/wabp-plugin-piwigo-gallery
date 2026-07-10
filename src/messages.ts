@@ -32,6 +32,8 @@ export const piwigoGalleryMessages: MessageCatalog = {
   'official.piwigo-gallery.registered': 'Piwigo account created for {username}.',
   'official.piwigo-gallery.registeredPending': 'Piwigo account created for {username}; it is waiting for approval before uploads/sign-in work.',
   'official.piwigo-gallery.multipleEligibleScopes': 'This WhatsApp identity belongs to multiple Piwigo-enabled groups. Register from the Piwigo web page so you can choose the group.',
+  'official.piwigo-gallery.accountRequiredWithProfileUrl': 'Gallery upload needs a Piwigo account linked to this WhatsApp identity.\n\n1. Create {accountLabel} account: reply /register gallery Your Name.\n\nAlready have an account? Go to {profileUrl}, log in, and add your WhatsApp phone number.',
+  'official.piwigo-gallery.accountRequired': 'Gallery upload needs a Piwigo account linked to this WhatsApp identity.\n\n1. Create {accountLabel} account: reply /register gallery Your Name.\n\nAlready have an account? Log in to Piwigo and add your WhatsApp phone number.',
   'official.piwigo-gallery.noPeople': 'No selectable people were returned by Piwigo.',
   'official.piwigo-gallery.uploadAlreadyActive': 'You already have an active gallery upload here. Use /upload or /cancel first.',
   'official.piwigo-gallery.uploadStartedGroup': 'I sent the setup questions here. Answer them to start collecting documents.',

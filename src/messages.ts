@@ -47,6 +47,7 @@ export const piwigoGalleryMessages: MessageCatalog = {
   'official.piwigo-gallery.collectingReady': 'Ready. Send photos/videos as WhatsApp documents, not normal media. Use /upload when finished, or I will upload automatically {minutes} minutes after the last accepted document.',
   'official.piwigo-gallery.documentStaged': 'Document added ({count} total). Use /upload when finished, or wait for automatic upload.',
   'official.piwigo-gallery.sendAsDocument': 'Please resend that file as a document so original quality is preserved.',
+  'official.piwigo-gallery.mediaDumpDocumentsHint': 'If you send those files as documents instead of as media (preserves quality), I can upload them directly to the gallery for you.',
   'official.piwigo-gallery.fileRejected': 'That document type is not accepted by the gallery.',
   'official.piwigo-gallery.fileTooLarge': 'That document is larger than the configured upload limit.',
   'official.piwigo-gallery.mediaUnavailable': 'I could not download that document from WhatsApp. Send it again as a document.',

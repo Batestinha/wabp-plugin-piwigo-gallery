@@ -23,6 +23,9 @@ import {
 } from './store';
 
 const batchMutationLocks = new Map<string, Promise<unknown>>();
+const MEDIA_DUMP_BURST_TTL_SECONDS = 120;
+const MEDIA_DUMP_REMINDER_COOLDOWN_SECONDS = 15 * 60;
+const MEDIA_DUMP_BURST_THRESHOLD = 2;
 
 export function createPiwigoGalleryHooks(context: PluginRuntimeContext): PluginRuntimeHooks {
   return {
@@ -48,15 +51,24 @@ async function handleMessage(
   if (!config.enabled || event.isCommandLike) {
     return;
   }
+  const messageType = normalizedMessageType(event.message.type);
+  if (!event.message.hasMedia && messageType !== 'album') {
+    return;
+  }
   const batch = await getActiveBatchForActorWids(context.dataStore, event.scopeId, event.message.chatId, eventActorWids(event));
-  if (!batch || batch.status !== 'collecting') {
-    return;
-  }
-  if (!event.message.hasMedia) {
-    return;
-  }
-  if (event.message.type.toLowerCase() !== 'document') {
+  const activeUpload = batch?.status === 'collecting';
+  if (messageType !== 'document') {
+    const mediaDumpReminder = await maybeMediaDumpReminder(context, event, { activeUpload, messageType });
+    if (mediaDumpReminder.action) {
+      return [mediaDumpReminder.action];
+    }
+    if (!activeUpload || mediaDumpReminder.suppressSingleMediaReply) {
+      return;
+    }
     return [await reply(context, event, 'official.piwigo-gallery.sendAsDocument')];
+  }
+  if (!activeUpload) {
+    return;
   }
   if (!context.mediaStore) {
     return [await reply(context, event, 'official.piwigo-gallery.failed', {
@@ -109,6 +121,46 @@ async function handleMessage(
       payload: { batchId: batch.id }
     }
   ];
+}
+
+async function maybeMediaDumpReminder(
+  context: PluginRuntimeContext,
+  event: PluginMessageEvent,
+  input: { activeUpload: boolean; messageType: string }
+): Promise<{ action?: PluginAction | undefined; suppressSingleMediaReply: boolean }> {
+  if (input.messageType === 'album') {
+    return mediaDumpReminder(context, event);
+  }
+  if (!isImageOrVideoMediaDumpCandidate(event, input.messageType)) {
+    return { suppressSingleMediaReply: false };
+  }
+  if (input.activeUpload) {
+    return mediaDumpReminder(context, event);
+  }
+
+  const count = await context.ephemeralStore.increment(mediaDumpBurstKey(event), MEDIA_DUMP_BURST_TTL_SECONDS);
+  if (count < MEDIA_DUMP_BURST_THRESHOLD) {
+    return { suppressSingleMediaReply: false };
+  }
+  return mediaDumpReminder(context, event);
+}
+
+async function mediaDumpReminder(
+  context: PluginRuntimeContext,
+  event: PluginMessageEvent
+): Promise<{ action?: PluginAction | undefined; suppressSingleMediaReply: boolean }> {
+  const key = mediaDumpReminderKey(event);
+  if (await context.ephemeralStore.get(key)) {
+    return { suppressSingleMediaReply: true };
+  }
+  await context.ephemeralStore.set(key, {
+    messageId: event.message.id,
+    remindedAt: event.receivedAt.toISOString()
+  }, MEDIA_DUMP_REMINDER_COOLDOWN_SECONDS);
+  return {
+    suppressSingleMediaReply: true,
+    action: await reply(context, event, 'official.piwigo-gallery.mediaDumpDocumentsHint')
+  };
 }
 
 async function appendStagedFile(
@@ -393,6 +445,33 @@ function hasDownloadReference(file: PiwigoAlbumAnnouncementFile): boolean {
 
 function eventActorWids(event: PluginMessageEvent): string[] {
   return uniqueWids([event.actorWid, event.message.senderWid, event.message.authorWid, ...(event.actorAliases ?? [])]);
+}
+
+function isImageOrVideoMediaDumpCandidate(event: PluginMessageEvent, messageType: string): boolean {
+  if (messageType === 'image' || messageType === 'video') {
+    return true;
+  }
+  if (messageType !== 'unknown') {
+    return false;
+  }
+  const mimeType = event.message.mediaMimeType?.toLowerCase().split(';')[0] ?? '';
+  return mimeType.startsWith('image/') || mimeType.startsWith('video/');
+}
+
+function normalizedMessageType(type: string | undefined): string {
+  return (type ?? 'unknown').trim().toLowerCase();
+}
+
+function mediaDumpBurstKey(event: PluginMessageEvent): string {
+  return `media-dump-burst:${event.scopeId}:${event.message.chatId}:${mediaDumpActorKey(event)}`;
+}
+
+function mediaDumpReminderKey(event: PluginMessageEvent): string {
+  return `media-dump-reminder:${event.scopeId}:${event.message.chatId}:${mediaDumpActorKey(event)}`;
+}
+
+function mediaDumpActorKey(event: PluginMessageEvent): string {
+  return eventActorWids(event)[0] ?? event.actorWid.trim().toLowerCase();
 }
 
 function uniqueWids(wids: Array<string | null | undefined>): string[] {

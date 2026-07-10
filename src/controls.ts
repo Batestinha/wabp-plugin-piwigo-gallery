@@ -64,6 +64,14 @@ export const piwigoGalleryControls: ControlDescriptor[] = [
     ui: { widget: 'number' }
   }),
   control({
+    path: 'mediaDumpDocumentsHint',
+    label: 'Media dump hint',
+    description: 'Quote-reply text sent when WhatsApp photos/videos arrive as a media dump. Leave blank to use the localized language-pack message.',
+    order: 60,
+    schema: { type: 'string', max: 500 },
+    ui: { widget: 'text' }
+  }),
+  control({
     path: 'newAlbumAnnouncementsEnabled',
     label: 'New album announcements',
     description: 'Announce newly populated Piwigo albums to a WhatsApp group.',

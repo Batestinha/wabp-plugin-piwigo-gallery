@@ -42,6 +42,15 @@ export interface PiwigoDownloadForBotResult {
   content_base64: string;
 }
 
+export interface PiwigoCalendarPublishResult {
+  scope_id: string;
+  calendar_id: string;
+  label: string;
+  download_url?: string;
+  calendar_url?: string;
+  updated_on: string;
+}
+
 type PiwigoResponse<T> =
   | { stat: 'ok'; result: T }
   | { stat: 'fail'; err?: number; message?: string };
@@ -88,6 +97,20 @@ export class PiwigoGalleryClient {
 
   registerAccount(username: string, whatsappJid: string, scopeId: string): Promise<{ username: string; pending?: boolean }> {
     return this.post('wabp.piwigo.account.register', { username, whatsapp_jid: whatsappJid, scope_id: scopeId });
+  }
+
+  publishCalendar(input: {
+    scopeId: string;
+    calendarId: string;
+    label: string;
+    icsBody: string;
+  }): Promise<PiwigoCalendarPublishResult> {
+    return this.post<PiwigoCalendarPublishResult>('wabp.piwigo.calendar.publish', {
+      scope_id: input.scopeId,
+      calendar_id: input.calendarId,
+      label: input.label,
+      ics_body: input.icsBody
+    });
   }
 
   uploadForJid(input: {

@@ -26,7 +26,6 @@ export const piwigoGalleryManifest: PluginManifest = {
     '/gallery download',
     '/send gallery',
     '/upload',
-    '/cancel',
     '/accept',
     '/refuse',
     '/login gallery',
@@ -42,6 +41,31 @@ export const piwigoGalleryManifest: PluginManifest = {
   configSchema: piwigoGalleryConfigSchema,
   dangerousActions: [],
   backgroundJobs: [PIWIGO_GALLERY_FINALIZE_JOB, PIWIGO_GALLERY_ANNOUNCE_NEW_ALBUM_JOB],
+  cancellation: {
+    workflows: [
+      {
+        id: 'gallery-upload-setup',
+        description: 'Guided gallery upload setup before document collection starts.',
+        mode: 'core-flow',
+        scope: 'actor-chat',
+        commands: ['/send gallery'],
+        cancellableStates: ['active'],
+        terminalStates: ['completed', 'cancelled', 'expired'],
+        effects: ['discard-gallery-upload-draft']
+      },
+      {
+        id: 'gallery-upload-batch',
+        description: 'Active gallery document collection or upload batch.',
+        mode: 'plugin-handler',
+        scope: 'actor-chat',
+        commands: ['/send gallery', '/upload'],
+        cancellableStates: ['collecting', 'uploading'],
+        terminalStates: ['completed', 'cancelled', 'expired', 'failed'],
+        effects: ['delete-staged-media', 'clear-active-batch'],
+        auditAction: 'piwigo-gallery.upload.cancel'
+      }
+    ]
+  },
   assistant: {
     summary: 'Piwigo gallery upload workflow for collecting WhatsApp documents, linking users, and finalizing gallery batches.',
     useCases: [
@@ -70,7 +94,7 @@ export const piwigoGalleryManifest: PluginManifest = {
       {
         intent: 'gallery_upload',
         description: 'Start, finalize, or cancel a guided gallery upload batch.',
-        commands: ['/send gallery', '/upload', '/cancel']
+        commands: ['/send gallery', '/upload']
       },
       {
         intent: 'gallery_download',

@@ -1,7 +1,7 @@
 import type { CommandMetadata, CommandTargetSpec } from '../../../adminBot/router/commandMetadata';
 import type { CommandContext } from '../../../adminBot/router/commandRouter';
 import type { TranslateFn } from '../../../platform/i18n';
-import type { PluginCommandContext } from '../../../platform/pluginRuntime/types';
+import type { PluginCancellationRegistration, PluginCancellationRequest, PluginCommandContext } from '../../../platform/pluginRuntime/types';
 import {
   commandText,
   makeId,
@@ -120,12 +120,6 @@ export function registerPiwigoGalleryCommands(context: PluginCommandContext): vo
     descriptionKey: 'official.piwigo-gallery.help.upload'
   }), async (ctx) => finalizeActiveUpload(context, ctx));
 
-  router.register('cancel', '*', galleryUploadCommand({
-    auditAction: 'piwigo-gallery.upload.cancel',
-    usage: '/cancel',
-    descriptionKey: 'official.piwigo-gallery.help.cancel'
-  }), async (ctx) => cancelActiveUpload(context, ctx));
-
   router.register('accept', '*', galleryAuthCommand({
     auditAction: 'piwigo-gallery.account.link.accept',
     usage: '/accept',
@@ -228,6 +222,49 @@ export function registerPiwigoGalleryCommands(context: PluginCommandContext): vo
   });
 }
 
+export function registerPiwigoGalleryCancellations(context: PluginCommandContext): PluginCancellationRegistration[] {
+  const runtime = requireOfficialCommandRuntime(context);
+  return [
+    {
+      workflowId: 'gallery-upload-setup',
+      cancel: async (input) => {
+        let cancelled = false;
+        for (const flow of input.cancelledFlows) {
+          if (!flow.scopeId || !flow.flowType.startsWith('official.piwigo-gallery.upload.')) {
+            continue;
+          }
+          const draft = await getDraft(runtime.dataStore, flow.scopeId, flow.id);
+          if (!draft) {
+            continue;
+          }
+          await deleteDraft(runtime.dataStore, draft.scopeId, draft.flowSessionId);
+          cancelled = true;
+        }
+        return cancelled ? { workflowId: 'gallery-upload-setup', cancelled: true } : undefined;
+      }
+    },
+    {
+      workflowId: 'gallery-upload-batch',
+      cancel: async (input) => {
+        for (const scopeId of uniquePlainStrings(input.scopeIds)) {
+          const batch = await getActiveBatchForActorWids(runtime.dataStore, scopeId, input.message.chatId, input.actorWids);
+          if (!batch || (batch.status !== 'collecting' && batch.status !== 'uploading')) {
+            continue;
+          }
+          await cancelGalleryBatch(context, runtime, batch);
+          const t = await piwigoMessageTranslator(context, input.message, input.actor, scopeId);
+          return {
+            workflowId: 'gallery-upload-batch',
+            cancelled: true,
+            text: t('official.piwigo-gallery.cancelled')
+          };
+        }
+        return undefined;
+      }
+    }
+  ];
+}
+
 async function completeLinkRequest(
   context: PluginCommandContext,
   runtime: ReturnType<typeof requireOfficialCommandRuntime>,
@@ -311,6 +348,15 @@ async function piwigoCommandTranslator(
     const translated = scoped(key, params);
     return translated === key ? ctx.t(key, params) : translated;
   };
+}
+
+function piwigoMessageTranslator(
+  context: PluginCommandContext,
+  _message: PluginCancellationRequest['message'],
+  actor: PluginCancellationRequest['actor'],
+  scopeId?: string | undefined
+): Promise<TranslateFn> {
+  return context.i18n.translatorForIdentity(actor.wid, scopeId);
 }
 
 function linkRequestLookupWids(ctx: CommandContext): string[] {
@@ -642,14 +688,11 @@ async function finalizeActiveUpload(context: PluginCommandContext, ctx: CommandC
   return { handled: true, text: t('official.piwigo-gallery.finalizeQueued') };
 }
 
-async function cancelActiveUpload(context: PluginCommandContext, ctx: CommandContext) {
-  const runtime = requireOfficialCommandRuntime(context);
-  const scopeId = requireScopeId(ctx);
-  const t = await piwigoCommandTranslator(context, ctx, scopeId);
-  const batch = await getActiveBatchForActorWids(runtime.dataStore, scopeId, ctx.message.chatId, commandActorWids(ctx));
-  if (!batch || (batch.status !== 'collecting' && batch.status !== 'uploading')) {
-    return { handled: true, text: t('official.piwigo-gallery.noActiveUpload') };
-  }
+async function cancelGalleryBatch(
+  context: PluginCommandContext,
+  runtime: ReturnType<typeof requireOfficialCommandRuntime>,
+  batch: GalleryUploadBatch
+): Promise<void> {
   for (const file of batch.files) {
     await context.mediaStore?.delete(file.mediaId).catch(() => undefined);
   }
@@ -657,7 +700,10 @@ async function cancelActiveUpload(context: PluginCommandContext, ctx: CommandCon
   batch.updatedAt = new Date().toISOString();
   await saveBatch(runtime.dataStore, batch);
   await clearActiveBatch(runtime.dataStore, batch);
-  return { handled: true, text: t('official.piwigo-gallery.cancelled') };
+}
+
+function uniquePlainStrings(values: Array<string | undefined>): string[] {
+  return [...new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value)))];
 }
 
 function galleryAdminCommand(input: {

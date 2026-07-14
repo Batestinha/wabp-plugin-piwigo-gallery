@@ -543,7 +543,7 @@ async function startUploadFlow(context: PluginCommandContext, ctx: CommandContex
     const acceptedTypes = await client.acceptedTypes();
     const definition = createGalleryUploadFlowDefinition({ t, people: peopleResult.people });
     registerUploadFlowCompletionHandler(context, definition.flowType, t);
-    const flowSessionId = await context.flowEngine.startFlow({
+    const { flowSessionId } = await context.flowEngine.startFlow({
       definition,
       message: ctx.message,
       scopeId

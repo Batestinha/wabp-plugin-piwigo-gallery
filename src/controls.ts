@@ -1,6 +1,7 @@
 import { defineControl } from '../../../platform/operatorConsole/controlCatalog/define';
 import type { ControlDescriptor, ControlSchemaMetadata, ControlUiHint } from '../../../platform/operatorConsole/controlCatalog/types';
 import { PIWIGO_GALLERY_PLUGIN_ID } from './manifest';
+import { piwigoGalleryMessages } from './messages';
 
 function control(input: {
   path: string;
@@ -25,7 +26,7 @@ function control(input: {
     configurable: true,
     storage: { kind: 'plugin-scope-config', pluginId: PIWIGO_GALLERY_PLUGIN_ID, path: input.path },
     schema: input.schema,
-    ui: input.ui,
+    ui: { helpText: input.description, ...input.ui },
     restartRequirement: 'NO_RESTART',
     dangerous: input.dangerous ?? false,
     confirmation: input.dangerous
@@ -66,10 +67,14 @@ export const piwigoGalleryControls: ControlDescriptor[] = [
   control({
     path: 'mediaDumpDocumentsHint',
     label: 'Media dump hint',
-    description: 'Quote-reply text sent when WhatsApp photos/videos arrive as a media dump. Leave blank to use the localized language-pack message.',
+    description: 'Optional quote-reply text sent when WhatsApp photos/videos arrive as a media dump.',
     order: 60,
     schema: { type: 'string', max: 500 },
-    ui: { widget: 'text' }
+    ui: {
+      widget: 'text',
+      placeholder: piwigoGalleryMessages['official.piwigo-gallery.mediaDumpDocumentsHint'],
+      helpText: `Custom WhatsApp reply for media-dump albums. Leave empty to use the default localized message: ${piwigoGalleryMessages['official.piwigo-gallery.mediaDumpDocumentsHint']}`
+    }
   }),
   control({
     path: 'accountCreationLabel',
@@ -78,14 +83,6 @@ export const piwigoGalleryControls: ControlDescriptor[] = [
     order: 62,
     schema: { type: 'string', max: 120 },
     ui: { widget: 'text' }
-  }),
-  control({
-    path: 'accountProfileUrl',
-    label: 'Account profile URL',
-    description: 'Public Piwigo profile page where existing users can log in and add their WhatsApp phone number.',
-    order: 64,
-    schema: { type: 'string', format: 'url' },
-    ui: { widget: 'url' }
   }),
   control({
     path: 'newAlbumAnnouncementsEnabled',
@@ -101,14 +98,19 @@ export const piwigoGalleryControls: ControlDescriptor[] = [
     description: 'WhatsApp group JID inside this scope where new album announcements are sent.',
     order: 80,
     schema: { type: 'string' },
-    ui: { widget: 'entity-picker', label: 'Group' }
+    ui: {
+      widget: 'entity-picker',
+      label: 'Group',
+      placeholder: 'Select announcement group',
+      helpText: 'WhatsApp group inside this scope that receives new-album announcements. Community scopes default to their WhatsApp announcement group when one is known.'
+    }
   }),
   control({
     path: 'newAlbumAnnouncementDelayMinutes',
-    label: 'Announcement delay',
+    label: 'Announcement delay minutes',
     description: 'Minutes after Piwigo reports a new album upload before the WhatsApp album announcement is sent.',
     order: 90,
-    schema: { type: 'number', min: 1, max: 1440 },
+    schema: { type: 'number', unit: 'minutes', min: 1, max: 1440 },
     ui: { widget: 'number' }
   })
 ];

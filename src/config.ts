@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 export const PIWIGO_GALLERY_DEFAULT_BASE_URL_ENV = 'PIWIGO_GALLERY_DEFAULT_BASE_URL';
 export const PIWIGO_GALLERY_DEFAULT_BOT_SECRET_ENV = 'PIWIGO_GALLERY_DEFAULT_BOT_SECRET';
+export const PIWIGO_GALLERY_ACCOUNT_PROFILE_URL_ENV = 'PIWIGO_GALLERY_ACCOUNT_PROFILE_URL';
 
 export const piwigoGalleryConfigSchema = z.object({
   enabled: z.boolean().default(false),
@@ -56,6 +57,13 @@ export function resolvePiwigoBotSecret(defaultBotSecret?: string | undefined): s
 
 export function defaultPiwigoBotSecret(env: NodeJS.ProcessEnv = process.env): string {
   return env[PIWIGO_GALLERY_DEFAULT_BOT_SECRET_ENV]?.trim() ?? '';
+}
+
+export function resolvePiwigoAccountProfileUrl(
+  config: PiwigoGalleryConfig,
+  defaultAccountProfileUrl?: string | undefined
+): string {
+  return normalizeOptionalUrl(defaultAccountProfileUrl?.trim() || config.accountProfileUrl);
 }
 
 function normalizeOptionalUrl(input: string): string {

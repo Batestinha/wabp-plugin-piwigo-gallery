@@ -5,6 +5,7 @@ import { piwigoGalleryMessages } from './messages';
 export const PIWIGO_GALLERY_PLUGIN_ID = 'official.piwigo-gallery';
 export const PIWIGO_GALLERY_FINALIZE_JOB = 'piwigo-gallery.finalize';
 export const PIWIGO_GALLERY_ANNOUNCE_NEW_ALBUM_JOB = 'piwigo-gallery.announce-new-album';
+export const PIWIGO_GALLERY_MEDIA_DUMP_HINT_JOB = 'piwigo-gallery.media-dump-hint';
 
 export const PIWIGO_GALLERY_PERMISSIONS = {
   configure: 'piwigo-gallery.configure',
@@ -40,7 +41,11 @@ export const piwigoGalleryManifest: PluginManifest = {
   requiredBotCapabilities: [],
   configSchema: piwigoGalleryConfigSchema,
   dangerousActions: [],
-  backgroundJobs: [PIWIGO_GALLERY_FINALIZE_JOB, PIWIGO_GALLERY_ANNOUNCE_NEW_ALBUM_JOB],
+  backgroundJobs: [
+    PIWIGO_GALLERY_FINALIZE_JOB,
+    PIWIGO_GALLERY_ANNOUNCE_NEW_ALBUM_JOB,
+    PIWIGO_GALLERY_MEDIA_DUMP_HINT_JOB
+  ],
   cancellation: {
     workflows: [
       {

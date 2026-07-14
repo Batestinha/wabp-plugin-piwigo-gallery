@@ -6,7 +6,12 @@ import type {
 import type { PluginRuntimeContext } from '../../../platform/pluginRuntime/runtime/pluginRuntimeContext';
 import type { PluginAction } from '../../../platform/pluginRuntime/runtime/pluginActionTypes';
 import { parsePiwigoGalleryConfig } from './config';
-import { PIWIGO_GALLERY_ANNOUNCE_NEW_ALBUM_JOB, PIWIGO_GALLERY_FINALIZE_JOB, PIWIGO_GALLERY_PLUGIN_ID } from './manifest';
+import {
+  PIWIGO_GALLERY_ANNOUNCE_NEW_ALBUM_JOB,
+  PIWIGO_GALLERY_FINALIZE_JOB,
+  PIWIGO_GALLERY_MEDIA_DUMP_HINT_JOB,
+  PIWIGO_GALLERY_PLUGIN_ID
+} from './manifest';
 import { PiwigoGalleryClient } from './piwigoClient';
 import {
   clearActiveBatch,
@@ -23,9 +28,15 @@ import {
 } from './store';
 
 const batchMutationLocks = new Map<string, Promise<unknown>>();
-const MEDIA_DUMP_BURST_TTL_SECONDS = 120;
 const MEDIA_DUMP_REMINDER_COOLDOWN_SECONDS = 15 * 60;
-const MEDIA_DUMP_BURST_THRESHOLD = 2;
+const MEDIA_DUMP_ALBUM_REPLY_DELAY_MS = 5_000;
+
+interface MediaDumpHintPayload {
+  chatId: string;
+  messageId: string;
+  actorWid: string;
+  actorAliases: string[];
+}
 
 export function createPiwigoGalleryHooks(context: PluginRuntimeContext): PluginRuntimeHooks {
   return {
@@ -38,6 +49,9 @@ export function createPiwigoGalleryHooks(context: PluginRuntimeContext): PluginR
       }
       if (job.jobName === PIWIGO_GALLERY_ANNOUNCE_NEW_ALBUM_JOB) {
         return announceNewAlbum(context, job);
+      }
+      if (job.jobName === PIWIGO_GALLERY_MEDIA_DUMP_HINT_JOB) {
+        return sendMediaDumpHint(context, job);
       }
     }
   };
@@ -55,21 +69,16 @@ async function handleMessage(
     return;
   }
   const messageType = normalizedMessageType(event.message.type);
-  if (!event.message.hasMedia && messageType !== 'album') {
+  if (!event.message.hasMedia) {
     return;
   }
   const batch = await getActiveBatchForActorWids(context.dataStore, event.scopeId, event.message.chatId, eventActorWids(event));
   const activeUpload = batch?.status === 'collecting';
   if (messageType !== 'document') {
-    const mediaDumpReminder = await maybeMediaDumpReminder(context, event, {
-      activeUpload,
-      messageType,
-      hintOverride: config.mediaDumpDocumentsHint
-    });
-    if (mediaDumpReminder.action) {
-      return [mediaDumpReminder.action];
+    if (messageType === 'album') {
+      return [enqueueMediaDumpHint(event)];
     }
-    if (!activeUpload || mediaDumpReminder.suppressSingleMediaReply) {
+    if (!activeUpload) {
       return;
     }
     return [await reply(context, event, 'official.piwigo-gallery.sendAsDocument')];
@@ -130,47 +139,51 @@ async function handleMessage(
   ];
 }
 
-async function maybeMediaDumpReminder(
-  context: PluginRuntimeContext,
-  event: PluginMessageEvent,
-  input: { activeUpload: boolean; messageType: string; hintOverride?: string | undefined }
-): Promise<{ action?: PluginAction | undefined; suppressSingleMediaReply: boolean }> {
-  if (input.messageType === 'album') {
-    return mediaDumpReminder(context, event, input.hintOverride);
-  }
-  if (!isImageOrVideoMediaDumpCandidate(event, input.messageType)) {
-    return { suppressSingleMediaReply: false };
-  }
-  if (input.activeUpload) {
-    return mediaDumpReminder(context, event, input.hintOverride);
-  }
-
-  const count = await context.ephemeralStore.increment(mediaDumpBurstKey(event), MEDIA_DUMP_BURST_TTL_SECONDS);
-  if (count < MEDIA_DUMP_BURST_THRESHOLD) {
-    return { suppressSingleMediaReply: false };
-  }
-  return mediaDumpReminder(context, event, input.hintOverride);
+function enqueueMediaDumpHint(event: PluginMessageEvent): PluginAction {
+  return {
+    type: 'plugin.enqueueJob',
+    pluginId: PIWIGO_GALLERY_PLUGIN_ID,
+    jobName: PIWIGO_GALLERY_MEDIA_DUMP_HINT_JOB,
+    scopeId: event.scopeId,
+    runAt: new Date(event.receivedAt.getTime() + MEDIA_DUMP_ALBUM_REPLY_DELAY_MS),
+    payload: {
+      chatId: event.message.chatId,
+      messageId: event.message.id,
+      actorWid: event.actorWid,
+      actorAliases: event.actorAliases ?? []
+    },
+    dedupeKey: `${PIWIGO_GALLERY_MEDIA_DUMP_HINT_JOB}:${event.scopeId}:${event.message.chatId}:${event.message.id}`
+  };
 }
 
-async function mediaDumpReminder(
+async function sendMediaDumpHint(
   context: PluginRuntimeContext,
-  event: PluginMessageEvent,
-  hintOverride?: string | undefined
-): Promise<{ action?: PluginAction | undefined; suppressSingleMediaReply: boolean }> {
-  const key = mediaDumpReminderKey(event);
+  job: PluginJobEvent
+): Promise<PluginAction[] | void> {
+  const payload = mediaDumpHintPayloadFromJob(job.payload);
+  if (!payload) {
+    return [{ type: 'audit.record', action: 'piwigo-gallery.media-dump-hint.skipped', metadataJson: { reason: 'invalid payload' } }];
+  }
+  const config = parsePiwigoGalleryConfig(await context.configFor(job.scopeId, payload.actorWid));
+  if (!config.enabled) {
+    return;
+  }
+  const key = mediaDumpReminderKey(job.scopeId, payload.chatId, mediaDumpPayloadActorWids(payload), payload.actorWid);
   if (await context.ephemeralStore.get(key)) {
-    return { suppressSingleMediaReply: true };
+    return;
   }
   await context.ephemeralStore.set(key, {
-    messageId: event.message.id,
-    remindedAt: event.receivedAt.toISOString()
+    messageId: payload.messageId,
+    remindedAt: job.runAt.toISOString()
   }, MEDIA_DUMP_REMINDER_COOLDOWN_SECONDS);
-  return {
-    suppressSingleMediaReply: true,
-    action: hintOverride?.trim()
-      ? replyText(event, hintOverride.trim())
-      : await reply(context, event, 'official.piwigo-gallery.mediaDumpDocumentsHint')
-  };
+  return [{
+    type: 'message.sendText',
+    chatId: payload.chatId,
+    quotedMessageId: payload.messageId,
+    text: config.mediaDumpDocumentsHint.trim()
+      ? config.mediaDumpDocumentsHint.trim()
+      : await t(context, job.scopeId, payload.actorWid, 'official.piwigo-gallery.mediaDumpDocumentsHint')
+  }];
 }
 
 async function appendStagedFile(
@@ -457,31 +470,39 @@ function eventActorWids(event: PluginMessageEvent): string[] {
   return uniqueWids([event.actorWid, event.message.senderWid, event.message.authorWid, ...(event.actorAliases ?? [])]);
 }
 
-function isImageOrVideoMediaDumpCandidate(event: PluginMessageEvent, messageType: string): boolean {
-  if (messageType === 'image' || messageType === 'video') {
-    return true;
-  }
-  if (messageType !== 'unknown') {
-    return false;
-  }
-  const mimeType = event.message.mediaMimeType?.toLowerCase().split(';')[0] ?? '';
-  return mimeType.startsWith('image/') || mimeType.startsWith('video/');
-}
-
 function normalizedMessageType(type: string | undefined): string {
   return (type ?? 'unknown').trim().toLowerCase();
 }
 
-function mediaDumpBurstKey(event: PluginMessageEvent): string {
-  return `media-dump-burst:${event.scopeId}:${event.message.chatId}:${mediaDumpActorKey(event)}`;
+function mediaDumpHintPayloadFromJob(payload: unknown): MediaDumpHintPayload | undefined {
+  if (typeof payload !== 'object' || payload === null) {
+    return undefined;
+  }
+  const value = payload as Record<string, unknown>;
+  if (typeof value.chatId !== 'string' || typeof value.messageId !== 'string' || typeof value.actorWid !== 'string') {
+    return undefined;
+  }
+  const actorAliases = Array.isArray(value.actorAliases)
+    ? value.actorAliases.filter((alias): alias is string => typeof alias === 'string')
+    : [];
+  return {
+    chatId: value.chatId,
+    messageId: value.messageId,
+    actorWid: value.actorWid,
+    actorAliases
+  };
 }
 
-function mediaDumpReminderKey(event: PluginMessageEvent): string {
-  return `media-dump-reminder:${event.scopeId}:${event.message.chatId}:${mediaDumpActorKey(event)}`;
+function mediaDumpPayloadActorWids(payload: MediaDumpHintPayload): string[] {
+  return uniqueWids([payload.actorWid, ...payload.actorAliases]);
 }
 
-function mediaDumpActorKey(event: PluginMessageEvent): string {
-  return eventActorWids(event)[0] ?? event.actorWid.trim().toLowerCase();
+function mediaDumpReminderKey(scopeId: string, chatId: string, actorWids: string[], actorWid: string): string {
+  return `media-dump-reminder:${scopeId}:${chatId}:${mediaDumpActorKey(actorWids, actorWid)}`;
+}
+
+function mediaDumpActorKey(actorWids: string[], actorWid: string): string {
+  return actorWids[0] ?? actorWid.trim().toLowerCase();
 }
 
 function uniqueWids(wids: Array<string | null | undefined>): string[] {
@@ -536,15 +557,6 @@ async function reply(
     chatId: event.message.chatId,
     quotedMessageId: event.message.id,
     text: await t(context, event.scopeId, event.actorWid, key, params)
-  };
-}
-
-function replyText(event: PluginMessageEvent, text: string): PluginAction {
-  return {
-    type: 'message.sendText',
-    chatId: event.message.chatId,
-    quotedMessageId: event.message.id,
-    text
   };
 }
 

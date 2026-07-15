@@ -48,6 +48,13 @@ const SCOPE_TARGET: CommandTargetSpec = {
   fallback: 'current_scope'
 };
 
+const CHAT_TARGET: CommandTargetSpec = {
+  kind: 'group',
+  name: 'chat',
+  flag: 'chat',
+  position: 0
+};
+
 export function registerPiwigoGalleryCommands(context: PluginCommandContext): void {
   const runtime = requireOfficialCommandRuntime(context);
   const router = context.router;
@@ -111,7 +118,8 @@ export function registerPiwigoGalleryCommands(context: PluginCommandContext): vo
   router.register('send', 'gallery', galleryUploadCommand({
     auditAction: 'piwigo-gallery.upload.start',
     usage: '/send gallery',
-    descriptionKey: 'official.piwigo-gallery.help.send'
+    descriptionKey: 'official.piwigo-gallery.help.send',
+    privateSetup: true
   }), async (ctx) => startUploadFlow(context, ctx));
 
   router.register('upload', '*', galleryUploadCommand({
@@ -507,6 +515,10 @@ async function startUploadFlow(context: PluginCommandContext, ctx: CommandContex
   const runtime = requireOfficialCommandRuntime(context);
   const scopeId = requireScopeId(ctx);
   const t = await piwigoCommandTranslator(context, ctx, scopeId);
+  const targetChatId = ctx.groupWid ?? (ctx.message.context === 'group' ? ctx.message.chatId : '');
+  if (!targetChatId.endsWith('@g.us')) {
+    return { handled: true, text: t('official.piwigo-gallery.notConfigured') };
+  }
   const config = parsePiwigoGalleryConfig(await runtime.configFor(scopeId, ctx.message.senderWid));
   if (!config.enabled) {
     return { handled: true, text: t('official.piwigo-gallery.disabled') };
@@ -524,7 +536,7 @@ async function startUploadFlow(context: PluginCommandContext, ctx: CommandContex
     return { handled: true, text: t('official.piwigo-gallery.notConfigured') };
   }
   const actorWids = commandActorWids(ctx);
-  const active = await getActiveBatchForActorWids(runtime.dataStore, scopeId, ctx.message.chatId, actorWids);
+  const active = await getActiveBatchForActorWids(runtime.dataStore, scopeId, targetChatId, actorWids);
   if (active && (active.status === 'collecting' || active.status === 'uploading')) {
     return { handled: true, text: t('official.piwigo-gallery.uploadAlreadyActive') };
   }
@@ -543,18 +555,21 @@ async function startUploadFlow(context: PluginCommandContext, ctx: CommandContex
     const acceptedTypes = await client.acceptedTypes();
     const definition = createGalleryUploadFlowDefinition({ t, people: peopleResult.people });
     registerUploadFlowCompletionHandler(context, definition.flowType, t);
-    const { flowSessionId } = await context.flowEngine.startFlow({
+    const flowStart = await context.flowEngine.startFlow({
       definition,
       message: ctx.message,
-      scopeId
+      scopeId,
+      conversationChatId: ctx.message.chatId,
+      conversationContext: 'private'
     });
+    const { flowSessionId } = flowStart;
     await saveDraft(runtime.dataStore, {
       flowSessionId,
       flowType: definition.flowType,
       scopeId,
       ...(ctx.groupId ? { groupId: ctx.groupId } : {}),
       ...(ctx.groupWid ? { groupWid: ctx.groupWid } : {}),
-      chatId: ctx.message.chatId,
+      chatId: targetChatId,
       actorWid: ctx.message.senderWid,
       actorAliases: actorWids,
       piwigoLinkedWid: people.whatsappJid,
@@ -564,9 +579,9 @@ async function startUploadFlow(context: PluginCommandContext, ctx: CommandContex
       autoFinalizeMinutes: config.autoFinalizeMinutes,
       createdAt: new Date().toISOString()
     });
-    return { handled: true, text: t('official.piwigo-gallery.uploadStartedGroup') };
+    return { handled: true, response: { kind: 'none' as const } };
   } catch (error) {
-    return { handled: true, text: t('official.piwigo-gallery.failed', { reason: errorMessage(error) }) };
+    return { handled: true, text: t('official.piwigo-gallery.uploadStartFailed') };
   }
 }
 
@@ -736,14 +751,25 @@ function galleryUploadCommand(input: {
   auditAction: string;
   usage: string;
   descriptionKey: string;
+  privateSetup?: boolean | undefined;
 }): CommandMetadata {
   return {
     plane: 'group_operation',
-    interaction: 'group_same_chat',
+    interaction: input.privateSetup ? 'private_same_chat' : 'group_same_chat',
     pluginId: PIWIGO_GALLERY_PLUGIN_ID,
     permission: PIWIGO_GALLERY_PERMISSIONS.upload,
     requiresManagedGroup: true,
-    targets: [SCOPE_TARGET],
+    ...(input.privateSetup
+      ? {
+          privateManagedTarget: {
+            mode: 'infer_group_or_community',
+            explicitTargetName: 'chat',
+            explicitArgPosition: 0,
+            collapseCommunities: true
+          },
+          targets: [CHAT_TARGET, SCOPE_TARGET]
+        }
+      : { targets: [SCOPE_TARGET] }),
     mutation: 'durable',
     auditAction: input.auditAction,
     assistant: galleryAssistantMetadata(input.usage, 'durable'),

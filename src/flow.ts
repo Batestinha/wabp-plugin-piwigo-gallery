@@ -13,7 +13,7 @@ export function createGalleryUploadFlowDefinition(input: {
     flowType,
     t: input.t,
     initialStepId: 'onde',
-    context: 'group',
+    context: 'private',
     timeoutMinutes: 30,
     completionReply: input.t('official.piwigo-gallery.flow.complete'),
     steps: {

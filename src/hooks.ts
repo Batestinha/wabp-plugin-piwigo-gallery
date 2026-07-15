@@ -69,15 +69,15 @@ async function handleMessage(
     return;
   }
   const messageType = normalizedMessageType(event.message.type);
+  if (messageType === 'album') {
+    return [enqueueMediaDumpHint(event)];
+  }
   if (!event.message.hasMedia) {
     return;
   }
   const batch = await getActiveBatchForActorWids(context.dataStore, event.scopeId, event.message.chatId, eventActorWids(event));
   const activeUpload = batch?.status === 'collecting';
   if (messageType !== 'document') {
-    if (messageType === 'album') {
-      return [enqueueMediaDumpHint(event)];
-    }
     if (!activeUpload) {
       return;
     }

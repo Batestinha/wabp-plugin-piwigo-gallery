@@ -29,7 +29,6 @@ export const piwigoGalleryManifest: PluginManifest = {
     '/upload',
     '/accept',
     '/refuse',
-    '/login gallery',
     '/register gallery'
   ],
   eventSubscriptions: ['message', 'plugin.job'],
@@ -108,8 +107,8 @@ export const piwigoGalleryManifest: PluginManifest = {
       },
       {
         intent: 'gallery_account',
-        description: 'Accept, refuse, log in, or register a linked gallery account.',
-        commands: ['/accept', '/refuse', '/login gallery', '/register gallery']
+        description: 'Accept, refuse, or register a linked gallery account.',
+        commands: ['/accept', '/refuse', '/register gallery']
       }
     ]
   }

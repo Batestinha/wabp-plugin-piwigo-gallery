@@ -154,46 +154,6 @@ export function registerPiwigoGalleryCommands(context: PluginCommandContext): vo
     context.config.PIWIGO_GALLERY_DEFAULT_BOT_SECRET
   ));
 
-  router.register('login', 'gallery', galleryAuthCommand({
-    auditAction: 'piwigo-gallery.account.login',
-    usage: '/login gallery CODE',
-    descriptionKey: 'official.piwigo-gallery.help.login'
-  }), async (ctx) => {
-    const fallbackT = await piwigoCommandTranslator(context, ctx);
-    const code = commandText(ctx).toUpperCase();
-    if (!code) {
-      return { handled: true, text: fallbackT('official.piwigo-gallery.loginUsage') };
-    }
-    const scopes = await configuredPiwigoScopesForCommand(ctx, {
-      defaultPiwigoBaseUrl: context.config.PIWIGO_GALLERY_DEFAULT_BASE_URL,
-      defaultPiwigoBotSecret: context.config.PIWIGO_GALLERY_DEFAULT_BOT_SECRET
-    });
-    if (scopes.length === 0) {
-      return { handled: true, text: fallbackT('official.piwigo-gallery.notConfigured') };
-    }
-    const t = await piwigoCommandTranslator(context, ctx, scopes[0]?.scopeId);
-    let lastError: unknown;
-    const tried = new Set<string>();
-    const candidateWids = piwigoCandidateWids(ctx);
-    for (const scope of scopes) {
-      const key = `${scope.connection.piwigoBaseUrl}\n${scope.connection.botSecret}`;
-      if (tried.has(key)) {
-        continue;
-      }
-      tried.add(key);
-      const client = new PiwigoGalleryClient(scope.connection);
-      for (const whatsappJid of candidateWids) {
-        try {
-          const result = await client.consumeLoginCode(code, whatsappJid);
-          return { handled: true, text: t('official.piwigo-gallery.loginApproved', { username: result.username }) };
-        } catch (error) {
-          lastError = error;
-        }
-      }
-    }
-    return { handled: true, text: t('official.piwigo-gallery.failed', { reason: errorMessage(lastError) }) };
-  });
-
   router.register('register', 'gallery', galleryAuthCommand({
     auditAction: 'piwigo-gallery.account.register',
     usage: '/register gallery Your Name',

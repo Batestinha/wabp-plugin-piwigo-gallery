@@ -93,10 +93,6 @@ export class PiwigoGalleryClient {
     });
   }
 
-  consumeLoginCode(code: string, whatsappJid: string): Promise<{ username: string }> {
-    return this.post('wabp.piwigo.auth.consumeLoginCode', { code, whatsapp_jid: whatsappJid });
-  }
-
   registerAccount(username: string, whatsappJid: string, scopeId: string): Promise<{ username: string; pending?: boolean }> {
     return this.post('wabp.piwigo.account.register', { username, whatsapp_jid: whatsappJid, scope_id: scopeId });
   }

@@ -5,7 +5,7 @@ import {
 } from '@prisma/client';
 import { prisma } from '../../../platform/db/prisma';
 import { PluginScopeResolver } from '../../../platform/pluginRuntime/runtime/pluginScopeResolver';
-import { resolveRuntimeBindingId, resolveBotProfileId } from '../../../platform/tenancy/botProfileTenant';
+import { resolveRuntimeBindingId, resolveWhatsAppAccountId } from '../../../platform/tenancy/accountTenant';
 import {
   configConnection,
   parsePiwigoGalleryConfig,
@@ -22,10 +22,10 @@ const MANAGED_GROUP_SOURCE_KINDS = [
 export async function assertPiwigoGalleryEligibleWid(
   wid: string,
   db: PrismaClient = prisma,
-  botProfileId: string = resolveBotProfileId(),
-  runtimeBindingId: string = resolveRuntimeBindingId(undefined, botProfileId)
+  whatsAppAccountId: string = resolveWhatsAppAccountId(),
+  runtimeBindingId: string = resolveRuntimeBindingId(undefined, whatsAppAccountId)
 ): Promise<void> {
-  if (await isPiwigoGalleryEligibleWid(wid, db, botProfileId, runtimeBindingId)) {
+  if (await isPiwigoGalleryEligibleWid(wid, db, whatsAppAccountId, runtimeBindingId)) {
     return;
   }
   throw new Error('WhatsApp identity is not a member of a Piwigo-enabled group.');
@@ -34,8 +34,8 @@ export async function assertPiwigoGalleryEligibleWid(
 export async function isPiwigoGalleryEligibleWid(
   wid: string,
   db: PrismaClient = prisma,
-  botProfileId: string = resolveBotProfileId(),
-  runtimeBindingId: string = resolveRuntimeBindingId(undefined, botProfileId)
+  whatsAppAccountId: string = resolveWhatsAppAccountId(),
+  runtimeBindingId: string = resolveRuntimeBindingId(undefined, whatsAppAccountId)
 ): Promise<boolean> {
   const identity = await db.waIdentity.findFirst({
     where: {
@@ -73,12 +73,12 @@ export async function isPiwigoGalleryEligibleWid(
     }
   });
 
-  const scopeResolver = new PluginScopeResolver(db, botProfileId, runtimeBindingId);
+  const scopeResolver = new PluginScopeResolver(db, whatsAppAccountId, runtimeBindingId);
   const groups = uniqueBy(records.flatMap((record) => record.group ? [record.group] : []), (group) => group.id);
   for (const group of groups) {
     const scopes = await scopeResolver.resolveGroupScopes(group.chatId);
     for (const scope of scopes) {
-      if (await scopeHasPiwigoGalleryEnabled(scope.scopeId, scopeResolver, db, botProfileId)) {
+      if (await scopeHasPiwigoGalleryEnabled(scope.scopeId, scopeResolver, db, whatsAppAccountId)) {
         return true;
       }
     }
@@ -104,15 +104,15 @@ export async function listConfiguredPiwigoGalleryEligibleScopes(
   wid: string,
   input: {
     db?: PrismaClient | undefined;
-    botProfileId?: string | undefined;
+    whatsAppAccountId?: string | undefined;
     runtimeBindingId?: string | undefined;
     defaultPiwigoBaseUrl?: string | undefined;
     defaultPiwigoBotSecret?: string | undefined;
   } = {}
 ): Promise<ConfiguredPiwigoGalleryScope[]> {
   const db = input.db ?? prisma;
-  const botProfileId = input.botProfileId ?? resolveBotProfileId();
-  const runtimeBindingId = resolveRuntimeBindingId(input.runtimeBindingId, botProfileId);
+  const whatsAppAccountId = input.whatsAppAccountId ?? resolveWhatsAppAccountId();
+  const runtimeBindingId = resolveRuntimeBindingId(input.runtimeBindingId, whatsAppAccountId);
   const identity = await db.waIdentity.findFirst({
     where: {
       OR: [
@@ -156,7 +156,7 @@ export async function listConfiguredPiwigoGalleryEligibleScopes(
     orderBy: { id: 'asc' }
   });
 
-  const scopeResolver = new PluginScopeResolver(db, botProfileId, runtimeBindingId);
+  const scopeResolver = new PluginScopeResolver(db, whatsAppAccountId, runtimeBindingId);
   const groups = uniqueBy(records.flatMap((record) => record.group ? [record.group] : []), (group) => group.id);
   const scopes = new Map<string, ConfiguredPiwigoGalleryScope>();
   for (const group of groups) {
@@ -166,7 +166,7 @@ export async function listConfiguredPiwigoGalleryEligibleScopes(
         resolved.scopeId,
         scopeResolver,
         db,
-        botProfileId,
+        whatsAppAccountId,
         input.defaultPiwigoBaseUrl,
         input.defaultPiwigoBotSecret
       );
@@ -194,7 +194,7 @@ async function resolveEffectivePiwigoGalleryConfig(
   scopeId: string,
   scopeResolver: PluginScopeResolver,
   db: PrismaClient,
-  botProfileId: string,
+  whatsAppAccountId: string,
   defaultPiwigoBaseUrl?: string | undefined,
   defaultPiwigoBotSecret?: string | undefined
 ): Promise<{ config: PiwigoGalleryConfig; connection: GalleryConnection } | undefined> {
@@ -210,7 +210,7 @@ async function resolveEffectivePiwigoGalleryConfig(
       pluginId: PIWIGO_GALLERY_PLUGIN_ID,
       enabled: true,
       scopeId: { in: scopeIds },
-      scope: { botProfileId }
+      scope: { whatsAppAccountId }
     },
     select: {
       scopeId: true,
@@ -240,7 +240,7 @@ async function scopeHasPiwigoGalleryEnabled(
   scopeId: string,
   scopeResolver: PluginScopeResolver,
   db: PrismaClient,
-  botProfileId: string
+  whatsAppAccountId: string
 ): Promise<boolean> {
   let scopeIds: string[];
   try {
@@ -253,7 +253,7 @@ async function scopeHasPiwigoGalleryEnabled(
       pluginId: PIWIGO_GALLERY_PLUGIN_ID,
       enabled: true,
       scopeId: { in: scopeIds },
-      scope: { botProfileId }
+      scope: { whatsAppAccountId }
     },
     select: { id: true }
   });

@@ -34,6 +34,8 @@ export const piwigoGalleryMessages: MessageCatalog = {
   'official.piwigo-gallery.noPeople': 'No selectable people were returned by Piwigo.',
   'official.piwigo-gallery.uploadAlreadyActive': 'You already have an active gallery upload here. Use /upload or /cancel first.',
   'official.piwigo-gallery.uploadStartedGroup': 'I sent the setup questions here. Answer them to start collecting documents.',
+  'official.piwigo-gallery.uploadStartedPrivate': 'I sent you a private message to finish gallery upload setup.',
+  'official.piwigo-gallery.uploadStartedInGroupFallback': 'I could not message you privately, so I started gallery upload setup here.',
   'official.piwigo-gallery.uploadStartFailed': 'I could not start the gallery upload setup. Try again in a moment.',
   'official.piwigo-gallery.flow.where': 'Where did you go?',
   'official.piwigo-gallery.flow.when': 'When was it? Use dd-mm-yyyy.',

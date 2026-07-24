@@ -2,6 +2,7 @@ import type { CommandMetadata, CommandTargetSpec } from '../../../adminBot/route
 import type { CommandContext } from '../../../adminBot/router/commandRouter';
 import type { TranslateFn } from '../../../platform/i18n';
 import type { PluginCancellationRegistration, PluginCancellationRequest, PluginCommandContext } from '../../../platform/pluginRuntime/types';
+import type { PrivateDeliveryFallback } from '../../../platform/transport/transportTypes';
 import {
   commandText,
   makeId,
@@ -119,7 +120,7 @@ export function registerPiwigoGalleryCommands(context: PluginCommandContext): vo
     auditAction: 'piwigo-gallery.upload.start',
     usage: '/send gallery',
     descriptionKey: 'official.piwigo-gallery.help.send',
-    privateSetup: true
+    privateContinuation: true
   }), async (ctx) => startUploadFlow(context, ctx));
 
   router.register('upload', '*', galleryUploadCommand({
@@ -375,6 +376,33 @@ function piwigoCandidateWids(ctx: CommandContext): string[] {
   ];
 }
 
+function piwigoPrivateFlowDeliveryFallback(ctx: CommandContext, actorWids: string[]): PrivateDeliveryFallback | undefined {
+  const groupWid = ctx.groupWid?.trim() || (ctx.message.context === 'group' ? ctx.message.chatId : '');
+  if (!groupWid.endsWith('@g.us')) {
+    return undefined;
+  }
+  const mentionWid = piwigoMentionWid(actorWids);
+  return mentionWid
+    ? {
+        chatId: groupWid,
+        mentionedWids: [mentionWid],
+        ...(ctx.message.context === 'group' ? { quotedMessageId: ctx.message.id } : {})
+      }
+    : undefined;
+}
+
+function piwigoPrivateChatWid(actorWids: string[], preferredWid?: string | undefined): string | undefined {
+  const preferred = preferredWid?.trim();
+  if (preferred && !preferred.endsWith('@g.us')) {
+    return preferred;
+  }
+  return actorWids.find((wid) => wid.endsWith('@c.us')) ?? actorWids.find((wid) => !wid.endsWith('@g.us'));
+}
+
+function piwigoMentionWid(actorWids: string[]): string | undefined {
+  return actorWids.find((wid) => wid.endsWith('@c.us')) ?? actorWids.find((wid) => wid.endsWith('@lid')) ?? actorWids[0];
+}
+
 function isPhoneWid(wid: string): boolean {
   return /^\d+@c\.us$/i.test(wid.trim());
 }
@@ -515,12 +543,25 @@ async function startUploadFlow(context: PluginCommandContext, ctx: CommandContex
     const acceptedTypes = await client.acceptedTypes();
     const definition = createGalleryUploadFlowDefinition({ t, people: peopleResult.people });
     registerUploadFlowCompletionHandler(context, definition.flowType, t);
+    const privateActorWid = piwigoPrivateChatWid(actorWids, ctx.actor?.wid ?? ctx.message.senderWid) ?? ctx.message.senderWid;
+    const privateDeliveryFallback = piwigoPrivateFlowDeliveryFallback(ctx, actorWids);
+    const conversationChatId = ctx.message.context === 'group'
+      ? privateActorWid
+      : ctx.message.chatId;
+    const flowMessage = ctx.message.context === 'group' && privateActorWid !== ctx.message.senderWid
+      ? {
+          ...ctx.message,
+          senderWid: privateActorWid,
+          authorWid: privateActorWid
+        }
+      : ctx.message;
     const flowStart = await context.flowEngine.startFlow({
       definition,
-      message: ctx.message,
+      message: flowMessage,
       scopeId,
-      conversationChatId: ctx.message.chatId,
-      conversationContext: 'private'
+      conversationChatId,
+      conversationContext: 'private',
+      ...(privateDeliveryFallback ? { privateDeliveryFallback } : {})
     });
     const { flowSessionId } = flowStart;
     await saveDraft(runtime.dataStore, {
@@ -539,6 +580,14 @@ async function startUploadFlow(context: PluginCommandContext, ctx: CommandContex
       autoFinalizeMinutes: config.autoFinalizeMinutes,
       createdAt: new Date().toISOString()
     });
+    if (ctx.message.context === 'group') {
+      return {
+        handled: true,
+        text: t(flowStart.privateDeliveryFallback
+          ? 'official.piwigo-gallery.uploadStartedInGroupFallback'
+          : 'official.piwigo-gallery.uploadStartedPrivate')
+      };
+    }
     return { handled: true, response: { kind: 'none' as const } };
   } catch (error) {
     return { handled: true, text: t('official.piwigo-gallery.uploadStartFailed') };
@@ -711,15 +760,15 @@ function galleryUploadCommand(input: {
   auditAction: string;
   usage: string;
   descriptionKey: string;
-  privateSetup?: boolean | undefined;
+  privateContinuation?: boolean | undefined;
 }): CommandMetadata {
   return {
     plane: 'group_operation',
-    interaction: input.privateSetup ? 'private_same_chat' : 'group_same_chat',
+    interaction: input.privateContinuation ? 'either_same_chat' : 'group_same_chat',
     pluginId: PIWIGO_GALLERY_PLUGIN_ID,
     permission: PIWIGO_GALLERY_PERMISSIONS.upload,
     requiresManagedGroup: true,
-    ...(input.privateSetup
+    ...(input.privateContinuation
       ? {
           privateManagedTarget: {
             mode: 'infer_group_or_community',

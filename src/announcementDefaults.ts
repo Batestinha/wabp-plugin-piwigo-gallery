@@ -36,8 +36,13 @@ async function communityGroupWidForScope(input: {
       runtimeBindingId: input.runtimeBindingId,
       communityPolicy: {
         is: {
-          enabled: true,
-          communityScopeId: input.scopeId
+          enabled: true
+        }
+      },
+      scopes: {
+        some: {
+          scopeId: input.scopeId,
+          directlyAttached: true
         }
       }
     },

@@ -56,6 +56,9 @@ const CHAT_TARGET: CommandTargetSpec = {
   position: 0
 };
 
+const PIWIGO_UPLOAD_SCOPE_MEMBER_ACCESS_PATH = 'access.allowScopeMemberUploads';
+const PIWIGO_DOWNLOAD_SCOPE_MEMBER_ACCESS_PATH = 'access.allowScopeMemberDownloads';
+
 export function registerPiwigoGalleryCommands(context: PluginCommandContext): void {
   const runtime = requireOfficialCommandRuntime(context);
   const router = context.router;
@@ -767,6 +770,7 @@ function galleryUploadCommand(input: {
     interaction: input.privateContinuation ? 'either_same_chat' : 'group_same_chat',
     pluginId: PIWIGO_GALLERY_PLUGIN_ID,
     permission: PIWIGO_GALLERY_PERMISSIONS.upload,
+    allowCurrentManagedGroupMemberConfigPath: PIWIGO_UPLOAD_SCOPE_MEMBER_ACCESS_PATH,
     requiresManagedGroup: true,
     ...(input.privateContinuation
       ? {
@@ -800,6 +804,7 @@ function galleryDownloadCommand(input: {
     interaction: 'group_same_chat',
     pluginId: PIWIGO_GALLERY_PLUGIN_ID,
     permission: PIWIGO_GALLERY_PERMISSIONS.download,
+    allowCurrentManagedGroupMemberConfigPath: PIWIGO_DOWNLOAD_SCOPE_MEMBER_ACCESS_PATH,
     requiresManagedGroup: true,
     targets: [SCOPE_TARGET],
     mutation: 'durable',

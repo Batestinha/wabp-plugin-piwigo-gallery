@@ -10,6 +10,7 @@ import {
   PIWIGO_GALLERY_ANNOUNCE_NEW_ALBUM_JOB,
   PIWIGO_GALLERY_FINALIZE_JOB,
   PIWIGO_GALLERY_MEDIA_DUMP_HINT_JOB,
+  PIWIGO_GALLERY_PERMISSIONS,
   PIWIGO_GALLERY_PLUGIN_ID
 } from './manifest';
 import { PiwigoGalleryClient } from './piwigoClient';
@@ -70,6 +71,15 @@ async function handleMessage(
   }
   const messageType = normalizedMessageType(event.message.type);
   if (messageType === 'album') {
+    if (!await actorCanUpload(context, {
+      scopeId: event.scopeId,
+      actorWid: event.actorWid,
+      groupId: event.groupId,
+      groupWid: event.groupWid ?? event.message.chatId,
+      allowScopeMemberUploads: config.access.allowScopeMemberUploads
+    })) {
+      return;
+    }
     return [enqueueMediaDumpHint(event)];
   }
   if (!event.message.hasMedia) {
@@ -168,6 +178,14 @@ async function sendMediaDumpHint(
   if (!config.enabled) {
     return;
   }
+  if (!await actorCanUpload(context, {
+    scopeId: job.scopeId,
+    actorWid: payload.actorWid,
+    groupWid: payload.chatId,
+    allowScopeMemberUploads: config.access.allowScopeMemberUploads
+  })) {
+    return;
+  }
   const key = mediaDumpReminderKey(job.scopeId, payload.chatId, mediaDumpPayloadActorWids(payload), payload.actorWid);
   if (await context.ephemeralStore.get(key)) {
     return;
@@ -184,6 +202,32 @@ async function sendMediaDumpHint(
       ? config.mediaDumpDocumentsHint.trim()
       : await t(context, job.scopeId, payload.actorWid, 'official.piwigo-gallery.mediaDumpDocumentsHint')
   }];
+}
+
+async function actorCanUpload(
+  context: PluginRuntimeContext,
+  input: {
+    scopeId: string;
+    actorWid: string;
+    groupId?: string | undefined;
+    groupWid?: string | undefined;
+    allowScopeMemberUploads: boolean;
+  }
+): Promise<boolean> {
+  if (!context.explainPermission) {
+    return true;
+  }
+  const decision = await context.explainPermission?.({
+    actorWid: input.actorWid,
+    action: PIWIGO_GALLERY_PERMISSIONS.upload,
+    scopeId: input.scopeId,
+    pluginId: PIWIGO_GALLERY_PLUGIN_ID,
+    ...(input.groupId ? { groupId: input.groupId } : {}),
+    ...(input.groupWid ? { groupWid: input.groupWid } : {}),
+    requiresCurrentManagedGroupMembership: true,
+    ...(input.allowScopeMemberUploads ? { allowCurrentManagedGroupMember: true } : {})
+  });
+  return decision?.allowed === true;
 }
 
 async function appendStagedFile(

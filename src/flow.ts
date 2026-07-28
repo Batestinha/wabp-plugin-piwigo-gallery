@@ -36,7 +36,6 @@ export function createGalleryUploadFlowDefinition(input: {
         options: input.people.map((person) => ({ label: person.label, value: person.id })),
         minSelections: 1,
         maxSelections: input.people.length,
-        presentation: 'text',
         nextStepId: 'confirmar'
       },
       confirmar: {
@@ -48,8 +47,7 @@ export function createGalleryUploadFlowDefinition(input: {
           { label: input.t('official.piwigo-gallery.flow.no'), value: 'no' }
         ],
         minSelections: 1,
-        maxSelections: 1,
-        presentation: 'text'
+        maxSelections: 1
       }
     }
   };

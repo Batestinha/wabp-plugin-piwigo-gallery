@@ -48,7 +48,6 @@ export interface PiwigoCalendarPublishResult {
   label: string;
   subscription_url?: string;
   webcal_url?: string;
-  download_url?: string;
   calendar_url?: string;
   updated_on: string;
 }

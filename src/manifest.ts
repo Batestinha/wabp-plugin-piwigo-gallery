@@ -31,6 +31,69 @@ export const piwigoGalleryManifest: PluginManifest = {
     '/refuse',
     '/register gallery'
   ],
+  help: {
+    featureId: 'gallery',
+    titleKey: 'official.piwigo-gallery.help.feature.title',
+    summaryKey: 'official.piwigo-gallery.help.feature.summary',
+    order: 40,
+    aliases: ['piwigo', 'photos', 'albums'],
+    topics: [
+      {
+        topicId: 'manage-gallery',
+        titleKey: 'official.piwigo-gallery.help.manage.title',
+        summaryKey: 'official.piwigo-gallery.help.manage.summary',
+        order: 10,
+        commands: ['/gallery status', '/gallery configure'],
+        instructionKeys: ['official.piwigo-gallery.help.manage.instruction'],
+        exampleKeys: ['official.piwigo-gallery.help.status.example', 'official.piwigo-gallery.help.configure.example'],
+        keywords: ['status', 'configure', 'settings'],
+        availability: { invocation: 'group_only', permission: PIWIGO_GALLERY_PERMISSIONS.configure }
+      },
+      {
+        topicId: 'upload-gallery',
+        titleKey: 'official.piwigo-gallery.help.upload.title',
+        summaryKey: 'official.piwigo-gallery.help.upload.summary',
+        order: 20,
+        commands: ['/send gallery', '/upload'],
+        instructionKeys: ['official.piwigo-gallery.help.upload.instruction'],
+        exampleKeys: ['official.piwigo-gallery.help.send.example', 'official.piwigo-gallery.help.upload.example'],
+        keywords: ['upload', 'send', 'documents', 'photos'],
+        availability: {
+          invocation: 'either',
+          permission: PIWIGO_GALLERY_PERMISSIONS.upload,
+          requiresCurrentManagedGroupMembership: true,
+          allowCurrentManagedGroupMemberConfigPath: 'access.allowScopeMemberUploads'
+        }
+      },
+      {
+        topicId: 'download-gallery',
+        titleKey: 'official.piwigo-gallery.help.download.title',
+        summaryKey: 'official.piwigo-gallery.help.download.summary',
+        order: 30,
+        commands: ['/gallery download'],
+        instructionKeys: ['official.piwigo-gallery.help.download.instruction'],
+        exampleKeys: ['official.piwigo-gallery.help.download.example'],
+        keywords: ['download', 'image', 'file', 'token'],
+        availability: {
+          invocation: 'group_only',
+          permission: PIWIGO_GALLERY_PERMISSIONS.download,
+          requiresCurrentManagedGroupMembership: true,
+          allowCurrentManagedGroupMemberConfigPath: 'access.allowScopeMemberDownloads'
+        }
+      },
+      {
+        topicId: 'link-gallery-account',
+        titleKey: 'official.piwigo-gallery.help.account.title',
+        summaryKey: 'official.piwigo-gallery.help.account.summary',
+        order: 40,
+        commands: ['/accept', '/refuse', '/register gallery'],
+        instructionKeys: ['official.piwigo-gallery.help.account.instruction'],
+        exampleKeys: ['official.piwigo-gallery.help.register.example'],
+        keywords: ['account', 'link', 'register', 'accept', 'refuse'],
+        availability: { invocation: 'either' }
+      }
+    ]
+  },
   eventSubscriptions: ['message', 'plugin.job'],
   requiredPermissions: [
     PIWIGO_GALLERY_PERMISSIONS.configure,

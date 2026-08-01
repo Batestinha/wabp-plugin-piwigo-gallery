@@ -67,7 +67,9 @@ export function registerPiwigoGalleryCommands(context: PluginCommandContext): vo
     mutation: 'none',
     auditAction: 'piwigo-gallery.status',
     usage: '/gallery status',
-    descriptionKey: 'official.piwigo-gallery.help.gallery'
+    descriptionKey: 'official.piwigo-gallery.help.gallery',
+    topicId: 'manage-gallery',
+    exampleKey: 'official.piwigo-gallery.help.status.example'
   }), async (ctx) => {
     const scopeId = requireScopeId(ctx);
     const t = await piwigoCommandTranslator(context, ctx, scopeId);
@@ -95,7 +97,9 @@ export function registerPiwigoGalleryCommands(context: PluginCommandContext): vo
   router.register('gallery', 'configure', galleryAdminCommand({
     auditAction: 'piwigo-gallery.configure',
     usage: '/gallery configure enabled=yes auto=30 max=536870912',
-    descriptionKey: 'official.piwigo-gallery.help.gallery'
+    descriptionKey: 'official.piwigo-gallery.help.gallery',
+    topicId: 'manage-gallery',
+    exampleKey: 'official.piwigo-gallery.help.configure.example'
   }), async (ctx) => {
     const scopeId = requireScopeId(ctx);
     const t = await piwigoCommandTranslator(context, ctx, scopeId);
@@ -116,26 +120,34 @@ export function registerPiwigoGalleryCommands(context: PluginCommandContext): vo
   router.register('gallery', 'download', galleryDownloadCommand({
     auditAction: 'piwigo-gallery.download',
     usage: '/gallery download image 123',
-    descriptionKey: 'official.piwigo-gallery.help.download'
+    descriptionKey: 'official.piwigo-gallery.help.download',
+    topicId: 'download-gallery',
+    exampleKey: 'official.piwigo-gallery.help.download.example'
   }), async (ctx) => downloadGalleryFile(context, ctx));
 
   router.register('send', 'gallery', galleryUploadCommand({
     auditAction: 'piwigo-gallery.upload.start',
     usage: '/send gallery',
     descriptionKey: 'official.piwigo-gallery.help.send',
+    topicId: 'upload-gallery',
+    exampleKey: 'official.piwigo-gallery.help.send.example',
     privateContinuation: true
   }), async (ctx) => startUploadFlow(context, ctx));
 
   router.register('upload', '*', galleryUploadCommand({
     auditAction: 'piwigo-gallery.upload.finalize',
     usage: '/upload',
-    descriptionKey: 'official.piwigo-gallery.help.upload'
+    descriptionKey: 'official.piwigo-gallery.help.upload',
+    topicId: 'upload-gallery',
+    exampleKey: 'official.piwigo-gallery.help.upload.example'
   }), async (ctx) => finalizeActiveUpload(context, ctx));
 
   router.register('accept', '*', galleryAuthCommand({
     auditAction: 'piwigo-gallery.account.link.accept',
     usage: '/accept',
-    descriptionKey: 'official.piwigo-gallery.help.accept'
+    descriptionKey: 'official.piwigo-gallery.help.accept',
+    topicId: 'link-gallery-account',
+    exampleKey: 'official.piwigo-gallery.help.accept.example'
   }), async (ctx) => completeLinkRequest(
     context,
     runtime,
@@ -148,7 +160,9 @@ export function registerPiwigoGalleryCommands(context: PluginCommandContext): vo
   router.register('refuse', '*', galleryAuthCommand({
     auditAction: 'piwigo-gallery.account.link.refuse',
     usage: '/refuse',
-    descriptionKey: 'official.piwigo-gallery.help.refuse'
+    descriptionKey: 'official.piwigo-gallery.help.refuse',
+    topicId: 'link-gallery-account',
+    exampleKey: 'official.piwigo-gallery.help.refuse.example'
   }), async (ctx) => completeLinkRequest(
     context,
     runtime,
@@ -161,7 +175,9 @@ export function registerPiwigoGalleryCommands(context: PluginCommandContext): vo
   router.register('register', 'gallery', galleryAuthCommand({
     auditAction: 'piwigo-gallery.account.register',
     usage: '/register gallery Your Name',
-    descriptionKey: 'official.piwigo-gallery.help.register'
+    descriptionKey: 'official.piwigo-gallery.help.register',
+    topicId: 'link-gallery-account',
+    exampleKey: 'official.piwigo-gallery.help.register.example'
   }), async (ctx) => {
     const fallbackT = await piwigoCommandTranslator(context, ctx);
     const username = commandText(ctx) || ctx.message.senderDisplayName || '';
@@ -740,6 +756,8 @@ function galleryAdminCommand(input: {
   auditAction: string;
   usage: string;
   descriptionKey: string;
+  topicId: GalleryHelpTopic;
+  exampleKey: string;
 }): CommandMetadata {
   return {
     plane: 'group_operation',
@@ -753,8 +771,12 @@ function galleryAdminCommand(input: {
     assistant: galleryAssistantMetadata(input.usage, input.mutation ?? 'durable'),
     help: {
       familyKey: 'official.piwigo-gallery.help.family',
+      featureId: 'gallery',
+      topicId: input.topicId,
       descriptionKey: input.descriptionKey,
-      usage: input.usage
+      usage: input.usage,
+      exampleKeys: [input.exampleKey],
+      keywords: ['gallery', 'piwigo', input.topicId]
     }
   };
 }
@@ -763,6 +785,8 @@ function galleryUploadCommand(input: {
   auditAction: string;
   usage: string;
   descriptionKey: string;
+  topicId: GalleryHelpTopic;
+  exampleKey: string;
   privateContinuation?: boolean | undefined;
 }): CommandMetadata {
   return {
@@ -788,8 +812,12 @@ function galleryUploadCommand(input: {
     assistant: galleryAssistantMetadata(input.usage, 'durable'),
     help: {
       familyKey: 'official.piwigo-gallery.help.family',
+      featureId: 'gallery',
+      topicId: input.topicId,
       descriptionKey: input.descriptionKey,
-      usage: input.usage
+      usage: input.usage,
+      exampleKeys: [input.exampleKey],
+      keywords: ['gallery', 'piwigo', input.topicId]
     }
   };
 }
@@ -798,6 +826,8 @@ function galleryDownloadCommand(input: {
   auditAction: string;
   usage: string;
   descriptionKey: string;
+  topicId: GalleryHelpTopic;
+  exampleKey: string;
 }): CommandMetadata {
   return {
     plane: 'group_operation',
@@ -812,8 +842,12 @@ function galleryDownloadCommand(input: {
     assistant: galleryAssistantMetadata(input.usage, 'durable'),
     help: {
       familyKey: 'official.piwigo-gallery.help.family',
+      featureId: 'gallery',
+      topicId: input.topicId,
       descriptionKey: input.descriptionKey,
-      usage: input.usage
+      usage: input.usage,
+      exampleKeys: [input.exampleKey],
+      keywords: ['gallery', 'piwigo', input.topicId]
     }
   };
 }
@@ -822,6 +856,8 @@ function galleryAuthCommand(input: {
   auditAction: string;
   usage: string;
   descriptionKey: string;
+  topicId: GalleryHelpTopic;
+  exampleKey: string;
 }): CommandMetadata {
   return {
     plane: 'system',
@@ -832,11 +868,17 @@ function galleryAuthCommand(input: {
     assistant: galleryAssistantMetadata(input.usage, 'durable'),
     help: {
       familyKey: 'official.piwigo-gallery.help.family',
+      featureId: 'gallery',
+      topicId: input.topicId,
       descriptionKey: input.descriptionKey,
-      usage: input.usage
+      usage: input.usage,
+      exampleKeys: [input.exampleKey],
+      keywords: ['gallery', 'piwigo', input.topicId]
     }
   };
 }
+
+type GalleryHelpTopic = 'manage-gallery' | 'upload-gallery' | 'download-gallery' | 'link-gallery-account';
 
 function galleryAssistantMetadata(
   usage: string,

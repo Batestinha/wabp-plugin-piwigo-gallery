@@ -1,9 +1,10 @@
 import type { GalleryConnection } from './config';
+import { z } from 'zod';
 
 export interface PiwigoAcceptedTypes {
   extensions: string[];
-  media_only?: boolean;
-  max_file_size?: number | null;
+  media_only?: boolean | undefined;
+  max_file_size?: number | null | undefined;
 }
 
 export interface PiwigoPerson {
@@ -28,12 +29,12 @@ export interface PiwigoEligibleScope {
 
 export interface PiwigoUploadResult {
   image_id: number;
-  url?: string;
+  url?: string | undefined;
   category_id: number;
   category_label: string;
-  created_category?: boolean;
-  user_id?: number;
-  username?: string;
+  created_category?: boolean | undefined;
+  user_id?: number | undefined;
+  username?: string | undefined;
 }
 
 export interface PiwigoDownloadForBotResult {
@@ -46,15 +47,85 @@ export interface PiwigoCalendarPublishResult {
   scope_id: string;
   calendar_id: string;
   label: string;
-  subscription_url?: string;
-  webcal_url?: string;
-  calendar_url?: string;
+  subscription_url?: string | undefined;
+  webcal_url?: string | undefined;
+  calendar_url?: string | undefined;
   updated_on: string;
 }
 
-type PiwigoResponse<T> =
-  | { stat: 'ok'; result: T }
-  | { stat: 'fail'; err?: number; message?: string };
+const piwigoFailureSchema = z.object({
+  stat: z.literal('fail'),
+  err: z.number().int().optional(),
+  message: z.string().optional()
+}).passthrough();
+
+const acceptedTypesSchema = z.object({
+  extensions: z.array(z.string().trim().min(1)).min(1),
+  media_only: z.boolean().optional(),
+  max_file_size: z.number().int().positive().nullable().optional()
+}).passthrough();
+
+const statusSchema = z.object({
+  ok: z.boolean(),
+  plugin: z.string().trim().min(1),
+  version: z.string().trim().min(1).optional()
+}).passthrough();
+
+const peopleSchema = z.object({
+  people: z.array(z.object({
+    id: z.number().int().positive(),
+    label: z.string().trim().min(1)
+  }).passthrough())
+}).passthrough();
+
+const linkResultSchema = z.object({
+  status: z.string().trim().min(1),
+  username: z.string().optional()
+}).passthrough();
+
+const registrationResultSchema = z.object({
+  username: z.string().trim().min(1),
+  pending: z.boolean().optional()
+}).passthrough();
+
+const calendarPublishResultSchema = z.object({
+  scope_id: z.string().trim().min(1),
+  calendar_id: z.string().trim().min(1),
+  label: z.string().trim().min(1),
+  subscription_url: z.string().optional(),
+  webcal_url: z.string().optional(),
+  calendar_url: z.string().optional(),
+  updated_on: z.string().trim().min(1)
+}).passthrough();
+
+const uploadResultSchema = z.object({
+  image_id: z.number().int().positive(),
+  url: z.string().optional(),
+  category_id: z.number().int().positive(),
+  category_label: z.string().trim().min(1),
+  created_category: z.boolean().optional(),
+  user_id: z.number().int().positive().optional(),
+  username: z.string().optional()
+}).passthrough();
+
+const downloadResultSchema = z.object({
+  filename: z.string().trim().min(1),
+  mime_type: z.string().trim().min(1),
+  content_base64: z.string().min(1)
+}).passthrough();
+
+export class PiwigoApiError extends Error {
+  constructor(
+    message: string,
+    readonly method: string,
+    readonly httpStatus?: number | undefined,
+    readonly piwigoCode?: number | undefined,
+    options?: ErrorOptions | undefined
+  ) {
+    super(message, options);
+    this.name = 'PiwigoApiError';
+  }
+}
 
 export class PiwigoGalleryClient {
   constructor(
@@ -63,15 +134,15 @@ export class PiwigoGalleryClient {
   ) {}
 
   acceptedTypes(): Promise<PiwigoAcceptedTypes> {
-    return this.post<PiwigoAcceptedTypes>('wabp.piwigo.media.acceptedTypes', {});
+    return this.post('wabp.piwigo.media.acceptedTypes', {}, acceptedTypesSchema);
   }
 
   status(): Promise<PiwigoStatusResult> {
-    return this.post<PiwigoStatusResult>('wabp.piwigo.status', {});
+    return this.post('wabp.piwigo.status', {}, statusSchema);
   }
 
   people(whatsappJid: string, scopeId: string): Promise<PiwigoPeopleResult> {
-    return this.post<PiwigoPeopleResult>('wabp.piwigo.media.people', { whatsapp_jid: whatsappJid, scope_id: scopeId });
+    return this.post('wabp.piwigo.media.people', { whatsapp_jid: whatsappJid, scope_id: scopeId }, peopleSchema);
   }
 
   completeLinkRequest(
@@ -82,18 +153,22 @@ export class PiwigoGalleryClient {
       scopeId?: string | undefined;
       eligibleScopes?: PiwigoEligibleScope[] | undefined;
     } = {}
-  ): Promise<{ status: string; username?: string }> {
+  ): Promise<{ status: string; username?: string | undefined }> {
     return this.post('wabp.piwigo.link.completeRequest', {
       request_token: requestToken,
       whatsapp_jid: whatsappJid,
       decision,
       ...(input.scopeId ? { scope_id: input.scopeId } : {}),
       ...(input.eligibleScopes ? { eligible_scopes_json: JSON.stringify(input.eligibleScopes) } : {})
-    });
+    }, linkResultSchema);
   }
 
-  registerAccount(username: string, whatsappJid: string, scopeId: string): Promise<{ username: string; pending?: boolean }> {
-    return this.post('wabp.piwigo.account.register', { username, whatsapp_jid: whatsappJid, scope_id: scopeId });
+  registerAccount(username: string, whatsappJid: string, scopeId: string): Promise<{ username: string; pending?: boolean | undefined }> {
+    return this.post(
+      'wabp.piwigo.account.register',
+      { username, whatsapp_jid: whatsappJid, scope_id: scopeId },
+      registrationResultSchema
+    );
   }
 
   publishCalendar(input: {
@@ -102,12 +177,12 @@ export class PiwigoGalleryClient {
     label: string;
     icsBody: string;
   }): Promise<PiwigoCalendarPublishResult> {
-    return this.post<PiwigoCalendarPublishResult>('wabp.piwigo.calendar.publish', {
+    return this.post('wabp.piwigo.calendar.publish', {
       scope_id: input.scopeId,
       calendar_id: input.calendarId,
       label: input.label,
       ics_body: input.icsBody
-    });
+    }, calendarPublishResultSchema);
   }
 
   uploadForJid(input: {
@@ -129,7 +204,7 @@ export class PiwigoGalleryClient {
     form.set('with_user_ids', input.withUserIds.join(','));
     const blob = new Blob([new Uint8Array(input.buffer)], { type: input.mimeType });
     form.set('image', blob, input.filename);
-    return this.request<PiwigoUploadResult>('wabp.piwigo.media.uploadForJid', form);
+    return this.request('wabp.piwigo.media.uploadForJid', form, uploadResultSchema);
   }
 
   async downloadForBot(input: {
@@ -139,13 +214,13 @@ export class PiwigoGalleryClient {
     whatsappJid?: string | undefined;
     scopeId?: string | undefined;
   }): Promise<{ filename: string; mimeType: string; buffer: Buffer }> {
-    const result = await this.post<PiwigoDownloadForBotResult>('wabp.piwigo.media.downloadForBot', {
+    const result = await this.post('wabp.piwigo.media.downloadForBot', {
       ...(input.imageId !== undefined ? { image_id: input.imageId } : {}),
       ...(input.fileId ? { file_id: input.fileId } : {}),
       ...(input.downloadToken ? { download_token: input.downloadToken } : {}),
       ...(input.whatsappJid ? { whatsapp_jid: input.whatsappJid } : {}),
       ...(input.scopeId ? { scope_id: input.scopeId } : {})
-    });
+    }, downloadResultSchema);
     return {
       filename: result.filename,
       mimeType: result.mime_type,
@@ -153,16 +228,20 @@ export class PiwigoGalleryClient {
     };
   }
 
-  private post<T>(method: string, fields: Record<string, string | number | boolean>): Promise<T> {
+  private post<T>(
+    method: string,
+    fields: Record<string, string | number | boolean>,
+    resultSchema: z.ZodType<T>
+  ): Promise<T> {
     const body = new URLSearchParams();
     body.set('bot_secret', this.connection.botSecret);
     for (const [key, value] of Object.entries(fields)) {
       body.set(key, String(value));
     }
-    return this.request<T>(method, body);
+    return this.request(method, body, resultSchema);
   }
 
-  private async request<T>(method: string, body: BodyInit): Promise<T> {
+  private async request<T>(method: string, body: BodyInit, resultSchema: z.ZodType<T>): Promise<T> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
     const response = await fetch(`${this.connection.piwigoBaseUrl}/ws.php?format=json&method=${encodeURIComponent(method)}`, {
@@ -173,15 +252,47 @@ export class PiwigoGalleryClient {
       clearTimeout(timeout);
     });
     const text = await response.text();
-    let payload: PiwigoResponse<T>;
+    let payload: unknown;
     try {
-      payload = JSON.parse(text) as PiwigoResponse<T>;
-    } catch {
-      throw new Error(`Piwigo returned non-JSON response for ${method}: HTTP ${response.status}`);
+      payload = JSON.parse(text);
+    } catch (error) {
+      throw new PiwigoApiError(
+        `Piwigo returned non-JSON response for ${method}: HTTP ${response.status}`,
+        method,
+        response.status,
+        undefined,
+        { cause: error }
+      );
     }
-    if (payload.stat === 'ok') {
-      return payload.result;
+    const failure = piwigoFailureSchema.safeParse(payload);
+    if (failure.success) {
+      throw new PiwigoApiError(
+        failure.data.message ?? `Piwigo error ${failure.data.err ?? response.status}`,
+        method,
+        response.status,
+        failure.data.err
+      );
     }
-    throw new Error(payload.message ?? `Piwigo error ${payload.err ?? response.status}`);
+    const envelope = z.object({ stat: z.literal('ok'), result: z.unknown() }).passthrough().safeParse(payload);
+    if (!envelope.success) {
+      throw new PiwigoApiError(
+        `Piwigo returned an invalid response envelope for ${method}.`,
+        method,
+        response.status,
+        undefined,
+        { cause: envelope.error }
+      );
+    }
+    const result = resultSchema.safeParse(envelope.data.result);
+    if (!result.success) {
+      throw new PiwigoApiError(
+        `Piwigo returned an invalid result for ${method}.`,
+        method,
+        response.status,
+        undefined,
+        { cause: result.error }
+      );
+    }
+    return result.data;
   }
 }

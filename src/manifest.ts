@@ -3,9 +3,19 @@ import { piwigoGalleryConfigSchema } from './config';
 import { piwigoGalleryMessages } from './messages';
 
 export const PIWIGO_GALLERY_PLUGIN_ID = 'official.piwigo-gallery';
+export const PIWIGO_GALLERY_DATABASE = 'gallery';
 export const PIWIGO_GALLERY_FINALIZE_JOB = 'piwigo-gallery.finalize';
 export const PIWIGO_GALLERY_ANNOUNCE_NEW_ALBUM_JOB = 'piwigo-gallery.announce-new-album';
 export const PIWIGO_GALLERY_MEDIA_DUMP_HINT_JOB = 'piwigo-gallery.media-dump-hint';
+
+export const PIWIGO_GALLERY_EXTERNAL_ACTIONS = {
+  whatsappLinkRequestStart: 'piwigo.whatsappLinkRequest.start',
+  whatsappRegistrationOtpStart: 'piwigo.whatsappRegistrationOtp.start',
+  whatsappRegistrationOtpVerify: 'piwigo.whatsappRegistrationOtp.verify',
+  authCodeSend: 'piwigo.authCode.send',
+  eligibleScopesResolve: 'piwigo.eligibleScopes.resolve',
+  albumUploadObserved: 'piwigo.albumUploadObserved'
+} as const;
 
 export const PIWIGO_GALLERY_PERMISSIONS = {
   configure: 'piwigo-gallery.configure',
@@ -13,10 +23,17 @@ export const PIWIGO_GALLERY_PERMISSIONS = {
   download: 'piwigo-gallery.download'
 } as const;
 
+export const piwigoGalleryDatabases = [{
+  name: PIWIGO_GALLERY_DATABASE,
+  engine: 'sqlite' as const,
+  scope: 'account' as const,
+  migrations: 'migrations/gallery'
+}];
+
 export const piwigoGalleryManifest: PluginManifest = {
   pluginId: PIWIGO_GALLERY_PLUGIN_ID,
   kind: 'managed_group',
-  version: '0.1.0',
+  version: '0.2.0',
   coreApiRange: '>=0.2.0',
   messageNamespace: 'official.piwigo-gallery',
   descriptionKey: 'official.piwigo-gallery.description',
@@ -108,6 +125,46 @@ export const piwigoGalleryManifest: PluginManifest = {
     PIWIGO_GALLERY_ANNOUNCE_NEW_ALBUM_JOB,
     PIWIGO_GALLERY_MEDIA_DUMP_HINT_JOB
   ],
+  externalActions: [
+    {
+      actionId: PIWIGO_GALLERY_EXTERNAL_ACTIONS.whatsappLinkRequestStart,
+      access: 'mutation',
+      scope: 'account',
+      description: 'Start a Piwigo account-link request through a known WhatsApp contact.'
+    },
+    {
+      actionId: PIWIGO_GALLERY_EXTERNAL_ACTIONS.whatsappRegistrationOtpStart,
+      access: 'mutation',
+      scope: 'account',
+      description: 'Send and persist a WhatsApp registration OTP.'
+    },
+    {
+      actionId: PIWIGO_GALLERY_EXTERNAL_ACTIONS.whatsappRegistrationOtpVerify,
+      access: 'mutation',
+      scope: 'account',
+      description: 'Verify and consume a WhatsApp registration OTP.'
+    },
+    {
+      actionId: PIWIGO_GALLERY_EXTERNAL_ACTIONS.authCodeSend,
+      access: 'mutation',
+      scope: 'scope',
+      description: 'Deliver a scoped Piwigo authentication code through WhatsApp.'
+    },
+    {
+      actionId: PIWIGO_GALLERY_EXTERNAL_ACTIONS.eligibleScopesResolve,
+      access: 'read',
+      scope: 'account',
+      description: 'Resolve Piwigo-enabled scopes available to a WhatsApp identity.'
+    },
+    {
+      actionId: PIWIGO_GALLERY_EXTERNAL_ACTIONS.albumUploadObserved,
+      access: 'mutation',
+      scope: 'scope',
+      description: 'Observe a scoped Piwigo album upload and schedule its WhatsApp announcement.'
+    }
+  ],
+  databases: piwigoGalleryDatabases,
+  dataVersion: '2',
   cancellation: {
     workflows: [
       {

@@ -33,7 +33,7 @@ export const piwigoGalleryDatabases = [{
 export const piwigoGalleryManifest: PluginManifest = {
   pluginId: PIWIGO_GALLERY_PLUGIN_ID,
   kind: 'managed_group',
-  version: '0.3.0',
+  version: '0.4.0',
   coreApiRange: '>=0.2.0',
   messageNamespace: 'official.piwigo-gallery',
   descriptionKey: 'official.piwigo-gallery.description',
@@ -111,7 +111,7 @@ export const piwigoGalleryManifest: PluginManifest = {
       }
     ]
   },
-  eventSubscriptions: ['message', 'plugin.job'],
+  eventSubscriptions: ['message', 'private.message', 'plugin.job'],
   requiredPermissions: [
     PIWIGO_GALLERY_PERMISSIONS.configure,
     PIWIGO_GALLERY_PERMISSIONS.upload,
@@ -170,7 +170,7 @@ export const piwigoGalleryManifest: PluginManifest = {
     }
   ],
   databases: piwigoGalleryDatabases,
-  dataVersion: '4',
+  dataVersion: '5',
   cancellation: {
     workflows: [
       {

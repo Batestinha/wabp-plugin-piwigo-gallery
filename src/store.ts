@@ -25,8 +25,10 @@ export interface GalleryUploadDraft {
   groupId?: string | undefined;
   /** Exact physical managed-group target. It is immutable after insertion. */
   groupWid: string;
-  /** Collection chat. It must be the same exact physical group as groupWid. */
+  /** Exact physical managed-group provenance. It must be the same group as groupWid. */
   chatId: string;
+  /** Chat where documents are collected. Legacy callers default to chatId. */
+  collectionChatId?: string | undefined;
   actorWid: string;
   actorAliases?: string[] | undefined;
   actorIdentityId?: string | undefined;
@@ -41,6 +43,7 @@ export interface GalleryUploadDraft {
 }
 
 export interface StoredGalleryUploadDraft extends GalleryUploadDraft {
+  collectionChatId: string;
   updatedAt: string;
   version: number;
 }
@@ -72,8 +75,10 @@ export interface GalleryUploadBatch {
   groupId?: string | undefined;
   /** Exact physical managed-group target. It is immutable after insertion. */
   groupWid: string;
-  /** Collection chat. It must be the same exact physical group as groupWid. */
+  /** Exact physical managed-group provenance. It must be the same group as groupWid. */
   chatId: string;
+  /** Chat where documents are collected. Legacy callers default to chatId. */
+  collectionChatId?: string | undefined;
   actorWid: string;
   actorAliases?: string[] | undefined;
   actorIdentityId?: string | undefined;
@@ -110,6 +115,7 @@ export interface GalleryBatchTerminalNotification {
 }
 
 export interface StoredGalleryUploadBatch extends GalleryUploadBatch {
+  collectionChatId: string;
   deadlineGeneration: number;
   version: number;
 }
@@ -192,6 +198,7 @@ interface DraftRow extends PluginDatabaseRow {
   group_id: string | null;
   group_wid: string;
   chat_id: string;
+  collection_chat_id: string;
   actor_wid: string;
   actor_aliases_json: string;
   actor_identity_id: string | null;
@@ -212,6 +219,7 @@ interface BatchRow extends PluginDatabaseRow {
   group_id: string | null;
   group_wid: string;
   chat_id: string;
+  collection_chat_id: string;
   actor_wid: string;
   actor_aliases_json: string;
   actor_identity_id: string | null;
@@ -364,8 +372,11 @@ export function saveDraft(db: PluginDatabase, draft: GalleryUploadDraft): Stored
   const updatedAt = draft.updatedAt ?? draft.createdAt;
   return db.transaction(() => {
     const existing = getDraft(db, draft.scopeId, draft.flowSessionId);
+    const collectionChatId = normalizeCollectionChatId(
+      draft.collectionChatId ?? existing?.collectionChatId ?? draft.chatId
+    );
     if (existing) {
-      assertSameTarget(existing, draft, 'gallery upload draft');
+      assertSameTarget(existing, { ...draft, collectionChatId }, 'gallery upload draft');
       const result = db.run(
         `UPDATE gallery_upload_drafts
             SET flow_type = ?, actor_aliases_json = ?, piwigo_linked_wid = ?, actor_label = ?,
@@ -390,17 +401,18 @@ export function saveDraft(db: PluginDatabase, draft: GalleryUploadDraft): Stored
     } else {
       db.run(
         `INSERT INTO gallery_upload_drafts (
-          flow_session_id, flow_type, scope_id, group_id, group_wid, chat_id, actor_wid,
+          flow_session_id, flow_type, scope_id, group_id, group_wid, chat_id, collection_chat_id, actor_wid,
           actor_aliases_json, actor_identity_id, piwigo_linked_wid, actor_label,
           accepted_extensions_json, max_file_bytes, auto_finalize_minutes,
           created_at, updated_at, version
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
         draft.flowSessionId,
         draft.flowType,
         draft.scopeId,
         draft.groupId ?? null,
         normalizeWid(draft.groupWid),
         normalizeWid(draft.chatId),
+        collectionChatId,
         normalizeWid(draft.actorWid),
         JSON.stringify(uniqueWids([draft.actorWid, ...(draft.actorAliases ?? [])])),
         draft.actorIdentityId ?? null,
@@ -453,30 +465,35 @@ export function createBatch(
     throw new GalleryStorageInvariantError('New gallery upload batches must start in collecting state.');
   }
   assertExactTarget(batch.groupWid, batch.chatId);
+  const storedBatch = {
+    ...batch,
+    collectionChatId: normalizeCollectionChatId(batch.collectionChatId ?? batch.chatId)
+  };
   return db.transaction(() => {
-    insertBatch(db, batch);
-    for (const actorWid of batchActorWids(batch)) {
-      const active = db.get<{ batch_id: string }>(
-        `SELECT batch_id FROM gallery_active_batch_actors
-          WHERE scope_id = ? AND chat_id = ? AND actor_wid = ?`,
-        batch.scopeId,
-        normalizeWid(batch.chatId),
+    for (const actorWid of batchActorWids(storedBatch)) {
+      const active = activeBatchActorClaim(
+        db,
+        storedBatch.scopeId,
+        storedBatch.collectionChatId,
         actorWid
       );
       if (active && active.batch_id !== batch.id) {
         throw new GalleryStorageConflictError(
-          `Actor ${actorWid} already has active gallery upload ${active.batch_id} in ${batch.chatId}.`
+          `Actor ${actorWid} already has active gallery upload ${active.batch_id} in ${storedBatch.collectionChatId}.`
         );
       }
+    }
+    insertBatch(db, storedBatch);
+    for (const actorWid of batchActorWids(storedBatch)) {
       db.run(
-        `INSERT INTO gallery_active_batch_actors (scope_id, chat_id, actor_wid, batch_id, created_at)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(scope_id, chat_id, actor_wid) DO UPDATE SET batch_id = excluded.batch_id`,
-        batch.scopeId,
-        normalizeWid(batch.chatId),
+        `INSERT INTO gallery_active_batch_actors
+          (scope_id, collection_chat_id, actor_wid, batch_id, created_at)
+         VALUES (?, ?, ?, ?, ?)`,
+        storedBatch.scopeId,
+        storedBatch.collectionChatId,
         actorWid,
-        batch.id,
-        batch.createdAt
+        storedBatch.id,
+        storedBatch.createdAt
       );
     }
     if (options.draftFlowSessionId) {
@@ -512,9 +529,9 @@ export function getActiveBatch(
 ): StoredGalleryUploadBatch | undefined {
   const active = db.get<{ batch_id: string }>(
     `SELECT batch_id FROM gallery_active_batch_actors
-      WHERE scope_id = ? AND chat_id = ? AND actor_wid = ?`,
+      WHERE scope_id = ? AND collection_chat_id = ? AND actor_wid = ?`,
     scopeId,
-    normalizeWid(chatId),
+    normalizeCollectionChatId(chatId),
     normalizeWid(actorWid)
   );
   return active?.batch_id ? getBatch(db, scopeId, active.batch_id) : undefined;
@@ -533,6 +550,36 @@ export function getActiveBatchForActorWids(
     }
   }
   return undefined;
+}
+
+export function getActiveBatchForActorWidsAcrossScopes(
+  db: PluginDatabase,
+  collectionChatId: string,
+  actorWids: string[]
+): StoredGalleryUploadBatch | undefined {
+  const normalizedChatId = normalizeCollectionChatId(collectionChatId);
+  const matches = new Map<string, { scopeId: string; batchId: string }>();
+  for (const actorWid of uniqueWids(actorWids)) {
+    const rows = db.all<{ scope_id: string; batch_id: string }>(
+      `SELECT scope_id, batch_id FROM gallery_active_batch_actors
+        WHERE collection_chat_id = ? AND actor_wid = ?`,
+      normalizedChatId,
+      actorWid
+    );
+    for (const row of rows) {
+      matches.set(`${row.scope_id}:${row.batch_id}`, {
+        scopeId: row.scope_id,
+        batchId: row.batch_id
+      });
+    }
+  }
+  if (matches.size > 1) {
+    throw new GalleryStorageInvariantError(
+      `Multiple active gallery uploads matched the collection inbox ${normalizedChatId}.`
+    );
+  }
+  const match = matches.values().next().value as { scopeId: string; batchId: string } | undefined;
+  return match ? getBatch(db, match.scopeId, match.batchId) : undefined;
 }
 
 export function clearActiveBatch(db: PluginDatabase, batch: Pick<GalleryUploadBatch, 'id'>): number {
@@ -1986,21 +2033,23 @@ export function digitsFromPhoneLike(value: string): string {
 function insertBatch(db: PluginDatabase, batch: GalleryUploadBatch): void {
   const deadlineGeneration = batch.deadlineGeneration ?? 1;
   const version = batch.version ?? 1;
+  const collectionChatId = normalizeCollectionChatId(batch.collectionChatId ?? batch.chatId);
   db.run(
     `INSERT INTO gallery_upload_batches (
-      id, status, scope_id, group_id, group_wid, chat_id, actor_wid, actor_aliases_json,
+      id, status, scope_id, group_id, group_wid, chat_id, collection_chat_id, actor_wid, actor_aliases_json,
       actor_identity_id, piwigo_linked_wid, actor_label, onde, quando, with_user_ids_json,
       accepted_extensions_json, max_file_bytes, auto_finalize_minutes, created_at, updated_at,
       auto_finalize_at, last_accepted_at, deadline_generation, version,
       finalization_claim_id, finalization_claimed_at, finalization_claim_expires_at,
       album_label, error
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     batch.id,
     batch.status,
     batch.scopeId,
     batch.groupId ?? null,
     normalizeWid(batch.groupWid),
     normalizeWid(batch.chatId),
+    collectionChatId,
     normalizeWid(batch.actorWid),
     JSON.stringify(uniqueWids([batch.actorWid, ...(batch.actorAliases ?? [])])),
     batch.actorIdentityId ?? null,
@@ -2066,6 +2115,7 @@ function draftFromRow(row: DraftRow): StoredGalleryUploadDraft {
     ...(row.group_id ? { groupId: row.group_id } : {}),
     groupWid: row.group_wid,
     chatId: row.chat_id,
+    collectionChatId: row.collection_chat_id,
     actorWid: row.actor_wid,
     actorAliases: parseJsonArray(row.actor_aliases_json, z.string()),
     ...(row.actor_identity_id ? { actorIdentityId: row.actor_identity_id } : {}),
@@ -2093,6 +2143,7 @@ function batchFromRow(db: PluginDatabase, row: BatchRow): StoredGalleryUploadBat
     ...(row.group_id ? { groupId: row.group_id } : {}),
     groupWid: row.group_wid,
     chatId: row.chat_id,
+    collectionChatId: row.collection_chat_id,
     actorWid: row.actor_wid,
     actorAliases: parseJsonArray(row.actor_aliases_json, z.string()),
     ...(row.actor_identity_id ? { actorIdentityId: row.actor_identity_id } : {}),
@@ -2308,6 +2359,37 @@ function assertExactTarget(groupWid: string, chatId: string): void {
   }
 }
 
+function normalizeCollectionChatId(chatId: string): string {
+  const normalized = normalizeWid(chatId);
+  if (!normalized) {
+    throw new GalleryStorageInvariantError('Gallery uploads require a collection inbox.');
+  }
+  return normalized;
+}
+
+function activeBatchActorClaim(
+  db: PluginDatabase,
+  scopeId: string,
+  collectionChatId: string,
+  actorWid: string
+): { scope_id: string; batch_id: string } | undefined {
+  if (collectionChatId.endsWith('@g.us')) {
+    return db.get<{ scope_id: string; batch_id: string }>(
+      `SELECT scope_id, batch_id FROM gallery_active_batch_actors
+        WHERE scope_id = ? AND collection_chat_id = ? AND actor_wid = ?`,
+      scopeId,
+      collectionChatId,
+      actorWid
+    );
+  }
+  return db.get<{ scope_id: string; batch_id: string }>(
+    `SELECT scope_id, batch_id FROM gallery_active_batch_actors
+      WHERE collection_chat_id = ? AND actor_wid = ?`,
+    collectionChatId,
+    actorWid
+  );
+}
+
 function normalizeAnnouncementGroupWid(groupWid: string): string {
   const normalized = normalizeWid(groupWid);
   if (!normalized.endsWith('@g.us')) {
@@ -2319,8 +2401,8 @@ function normalizeAnnouncementGroupWid(groupWid: string): string {
 }
 
 function assertSameTarget(
-  existing: Pick<GalleryUploadDraft, 'scopeId' | 'groupId' | 'groupWid' | 'chatId' | 'actorWid' | 'actorIdentityId'>,
-  replacement: Pick<GalleryUploadDraft, 'scopeId' | 'groupId' | 'groupWid' | 'chatId' | 'actorWid' | 'actorIdentityId'>,
+  existing: Pick<GalleryUploadDraft, 'scopeId' | 'groupId' | 'groupWid' | 'chatId' | 'collectionChatId' | 'actorWid' | 'actorIdentityId'>,
+  replacement: Pick<GalleryUploadDraft, 'scopeId' | 'groupId' | 'groupWid' | 'chatId' | 'collectionChatId' | 'actorWid' | 'actorIdentityId'>,
   label: string
 ): void {
   if (
@@ -2328,6 +2410,8 @@ function assertSameTarget(
     existing.groupId !== replacement.groupId ||
     normalizeWid(existing.groupWid) !== normalizeWid(replacement.groupWid) ||
     normalizeWid(existing.chatId) !== normalizeWid(replacement.chatId) ||
+    normalizeCollectionChatId(existing.collectionChatId ?? existing.chatId) !==
+      normalizeCollectionChatId(replacement.collectionChatId ?? replacement.chatId) ||
     normalizeWid(existing.actorWid) !== normalizeWid(replacement.actorWid) ||
     existing.actorIdentityId !== replacement.actorIdentityId
   ) {
@@ -2380,6 +2464,7 @@ const legacyDraftSchema = z.object({
   groupId: z.string().min(1).optional(),
   groupWid: z.string().min(1).optional(),
   chatId: z.string().min(1),
+  collectionChatId: z.string().min(1).optional(),
   actorWid: z.string().min(1),
   actorAliases: z.array(z.string()).optional(),
   actorIdentityId: z.string().min(1).optional(),
@@ -2411,6 +2496,7 @@ const legacyBatchSchema = z.object({
   groupId: z.string().min(1).optional(),
   groupWid: z.string().min(1).optional(),
   chatId: z.string().min(1),
+  collectionChatId: z.string().min(1).optional(),
   actorWid: z.string().min(1),
   actorAliases: z.array(z.string()).optional(),
   actorIdentityId: z.string().min(1).optional(),
@@ -2481,7 +2567,12 @@ function importLegacyRecord(db: PluginDatabase, row: LegacyPluginDataRecord, imp
     if (!parsed.success || !legacyScopeMatches(row, parsed.data.scopeId)) return false;
     if (!getDraft(db, parsed.data.scopeId, parsed.data.flowSessionId)) {
       const groupWid = parsed.data.groupWid ?? parsed.data.chatId;
-      saveDraft(db, { ...parsed.data, groupWid, chatId: groupWid });
+      saveDraft(db, {
+        ...parsed.data,
+        groupWid,
+        chatId: groupWid,
+        collectionChatId: parsed.data.collectionChatId ?? groupWid
+      });
     }
     return true;
   }
@@ -2497,6 +2588,7 @@ function importLegacyRecord(db: PluginDatabase, row: LegacyPluginDataRecord, imp
         status,
         groupWid,
         chatId: groupWid,
+        collectionChatId: parsed.data.collectionChatId ?? groupWid,
         deadlineGeneration: parsed.data.deadlineGeneration ?? 1,
         version: parsed.data.version ?? 1
       }));
@@ -2514,10 +2606,10 @@ function importLegacyRecord(db: PluginDatabase, row: LegacyPluginDataRecord, imp
     if (separator < 1) return false;
     const chatId = suffix.slice(0, separator);
     const actorWid = suffix.slice(separator + 1);
-    if (normalizeWid(chatId) !== normalizeWid(batch.chatId)) return false;
+    if (normalizeWid(chatId) !== normalizeWid(batch.collectionChatId)) return false;
     db.run(
       `INSERT OR IGNORE INTO gallery_active_batch_actors
-        (scope_id, chat_id, actor_wid, batch_id, created_at) VALUES (?, ?, ?, ?, ?)`,
+        (scope_id, collection_chat_id, actor_wid, batch_id, created_at) VALUES (?, ?, ?, ?, ?)`,
       scopeId,
       normalizeWid(chatId),
       normalizeWid(actorWid),
@@ -2581,9 +2673,9 @@ function reconstructImportedActiveBatches(db: PluginDatabase, createdAt: string)
     for (const actorWid of batchActorWids(batch)) {
       db.run(
         `INSERT OR IGNORE INTO gallery_active_batch_actors
-          (scope_id, chat_id, actor_wid, batch_id, created_at) VALUES (?, ?, ?, ?, ?)`,
+          (scope_id, collection_chat_id, actor_wid, batch_id, created_at) VALUES (?, ?, ?, ?, ?)`,
         batch.scopeId,
-        batch.chatId,
+        batch.collectionChatId,
         actorWid,
         batch.id,
         createdAt

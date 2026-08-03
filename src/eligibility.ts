@@ -90,7 +90,10 @@ export interface ConfiguredPiwigoGalleryScope {
   scopeId: string;
   groupId: string;
   groupWid: string;
+  managementMode?: 'OBSERVE' | 'ASSIST' | 'MANAGE' | undefined;
   linkChoiceKey: string;
+  /** Human-readable logical gallery/scope label, independent of a physical child group. */
+  scopeLabel?: string | undefined;
   label: string;
   config: PiwigoGalleryConfig;
   connection: GalleryConnection;
@@ -159,6 +162,7 @@ export async function listConfiguredPiwigoGalleryEligibleScopes(
   const scopeResolver = new PluginScopeResolver(db, whatsAppAccountId, runtimeBindingId);
   const groups = uniqueBy(records.flatMap((record) => record.group ? [record.group] : []), (group) => group.id);
   const scopes = new Map<string, ConfiguredPiwigoGalleryScope>();
+  const scopeLabels = new Map<string, string>();
   for (const group of groups) {
     const resolvedScopes = await scopeResolver.resolveGroupScopes(group.chatId);
     for (const resolved of resolvedScopes) {
@@ -173,11 +177,22 @@ export async function listConfiguredPiwigoGalleryEligibleScopes(
       if (!effective || !effective.config.enabled) {
         continue;
       }
+      let scopeLabel = scopeLabels.get(resolved.scopeId);
+      if (!scopeLabel) {
+        const scope = await db.scope.findUnique({
+          where: { id: resolved.scopeId },
+          select: { name: true }
+        });
+        scopeLabel = scope?.name?.trim() || group.displayName || resolved.groupWid;
+        scopeLabels.set(resolved.scopeId, scopeLabel);
+      }
       scopes.set(`${resolved.scopeId}:${resolved.groupId}`, {
         scopeId: resolved.scopeId,
         groupId: resolved.groupId,
         groupWid: resolved.groupWid,
+        managementMode: resolved.managementMode,
         linkChoiceKey: group.communityMetadata?.linkedParentChatId || group.chatId,
+        scopeLabel,
         label: group.displayName || resolved.groupWid,
         config: effective.config,
         connection: effective.connection

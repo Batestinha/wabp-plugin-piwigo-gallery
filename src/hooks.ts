@@ -36,6 +36,7 @@ import {
   completeBatchTerminalNotification,
   getAlbumAnnouncement,
   getActiveBatchForActorWids,
+  getActiveBatchForActorWidsAcrossScopes,
   getBatch,
   markBatchFileUploaded,
   recordAlbumAnnouncementDownloadFailure,
@@ -110,6 +111,26 @@ export function createPiwigoGalleryHooks(context: PluginRuntimeContext): PluginR
     context.logger.error({ err: error }, 'Piwigo gallery database preparation failed');
   });
   return {
+    async resolvePrivateMessageRoute(event) {
+      const database = await databasePreparation;
+      const batch = getActiveBatchForActorWidsAcrossScopes(
+        database,
+        event.chatId,
+        [event.actorWid, ...(event.actorAliases ?? [])]
+      );
+      if (
+        !batch
+        || batch.status !== 'collecting'
+        || new Date(batch.autoFinalizeAt).getTime() <= event.receivedAt.getTime()
+      ) {
+        return;
+      }
+      return {
+        scopeId: batch.scopeId,
+        ...(batch.groupId ? { groupId: batch.groupId } : {}),
+        groupWid: batch.groupWid
+      };
+    },
     async onMessage(event) {
       await databasePreparation;
       return handleMessage(context, event);
@@ -174,6 +195,19 @@ async function handleMessage(
   const db = await preparedGalleryDatabase(context.dataStore, context.databases);
   const batch = getActiveBatchForActorWids(db, event.scopeId, event.message.chatId, eventActorWids(event));
   const activeUpload = batch?.status === 'collecting';
+  if (
+    activeUpload
+    && event.message.context === 'private'
+    && !await actorCanUpload(context, {
+      scopeId: batch.scopeId,
+      actorWid: event.actorWid,
+      groupId: batch.groupId,
+      groupWid: batch.groupWid,
+      allowScopeMemberUploads: config.access.allowScopeMemberUploads
+    })
+  ) {
+    return;
+  }
   if (messageType !== 'document') {
     if (!activeUpload) {
       return;
@@ -969,10 +1003,10 @@ function dispatchBatchTerminalNotification(
   return [
     {
       type: 'message.sendText',
-      chatId: started.batch.chatId,
+      chatId: started.batch.collectionChatId ?? started.batch.chatId,
       text: started.notification.text,
       idempotencyKey: started.notification.deliveryKey,
-      requiredRemoteChatId: started.batch.groupWid,
+      requiredRemoteChatId: started.batch.collectionChatId ?? started.batch.chatId,
       abortBatchOnFailure: true
     },
     {

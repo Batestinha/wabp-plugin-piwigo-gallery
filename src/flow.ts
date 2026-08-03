@@ -17,6 +17,7 @@ interface GalleryFlowCopy {
 interface GalleryFlowStateData {
   copy: GalleryFlowCopy;
   people: PiwigoPerson[];
+  targetLabel?: string | undefined;
 }
 
 export function createGalleryUploadFlowDefinition(input: {
@@ -81,6 +82,7 @@ export function createGalleryUploadFlowDefinition(input: {
 export function galleryUploadFlowInitialData(input: {
   t: TranslateFn;
   people: PiwigoPerson[];
+  targetLabel?: string | undefined;
 }): Record<string, unknown> {
   return {
     gallery: {
@@ -92,9 +94,14 @@ export function galleryUploadFlowInitialData(input: {
         yes: input.t('official.piwigo-gallery.flow.yes'),
         no: input.t('official.piwigo-gallery.flow.no')
       },
-      people: input.people.map((person) => ({ id: person.id, label: person.label }))
+      people: input.people.map((person) => ({ id: person.id, label: person.label })),
+      ...(input.targetLabel?.trim() ? { targetLabel: input.targetLabel.trim() } : {})
     } satisfies GalleryFlowStateData
   };
+}
+
+export function galleryFlowTargetLabel(snapshot: FlowSessionSnapshot): string | undefined {
+  return galleryFlowStateData(snapshot.state.data)?.targetLabel;
 }
 
 export function galleryConfirmPurpose(): string {
@@ -154,8 +161,10 @@ function galleryFlowStateData(data: Record<string, unknown>): GalleryFlowStateDa
   if (people.length === 0) {
     return undefined;
   }
+  const targetLabel = typeof gallery.targetLabel === 'string' ? gallery.targetLabel.trim() : '';
   return {
     copy: copy as unknown as GalleryFlowCopy,
-    people
+    people,
+    ...(targetLabel ? { targetLabel } : {})
   };
 }

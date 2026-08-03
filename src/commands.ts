@@ -3,6 +3,7 @@ import type { CommandContext } from '../../../adminBot/router/commandRouter';
 import type { TranslateFn } from '../../../platform/i18n';
 import type { PluginCancellationRegistration, PluginCancellationRequest, PluginCommandContext } from '../../../platform/pluginRuntime/types';
 import type { PrivateDeliveryFallback } from '../../../platform/transport/transportTypes';
+import { requireIdentityAddress } from '../../../platform/identity/messageActor';
 import {
   commandText,
   parseBoolean,
@@ -461,14 +462,12 @@ function commandActorWids(ctx: CommandContext): string[] {
 }
 
 function piwigoCandidateWids(ctx: CommandContext): string[] {
-  const wids = commandActorWids(ctx);
-  return [
-    ...wids.filter(isPhoneWid),
-    ...wids.filter((wid) => !isPhoneWid(wid))
-  ];
+  const actor = requirePiwigoActor(ctx);
+  const identityAddress = requireIdentityAddress(actor);
+  return uniqueWids([identityAddress.canonicalWid, ...identityAddress.aliases]);
 }
 
-function piwigoPrivateFlowDeliveryFallback(ctx: CommandContext, actorWids: string[]): PrivateDeliveryFallback | undefined {
+function piwigoPrivateFlowDeliveryFallback(ctx: CommandContext): PrivateDeliveryFallback | undefined {
   if (ctx.message.context !== 'group') {
     return undefined;
   }
@@ -476,7 +475,7 @@ function piwigoPrivateFlowDeliveryFallback(ctx: CommandContext, actorWids: strin
   if (!groupWid.endsWith('@g.us')) {
     return undefined;
   }
-  const mentionWid = piwigoMentionWid(actorWids);
+  const mentionWid = requireIdentityAddress(requirePiwigoActor(ctx)).mentionWid;
   return mentionWid
     ? {
         chatId: groupWid,
@@ -486,25 +485,20 @@ function piwigoPrivateFlowDeliveryFallback(ctx: CommandContext, actorWids: strin
     : undefined;
 }
 
-function piwigoPrivateChatWid(actorWids: string[], preferredWid?: string | undefined): string | undefined {
-  const preferred = preferredWid?.trim();
-  if (preferred && !preferred.endsWith('@g.us')) {
-    return preferred;
-  }
-  return actorWids.find((wid) => wid.endsWith('@c.us')) ?? actorWids.find((wid) => !wid.endsWith('@g.us'));
+function piwigoPrivateChatWid(ctx: CommandContext): string {
+  return requireIdentityAddress(requirePiwigoActor(ctx)).deliveryChatId;
 }
 
-function piwigoMentionWid(actorWids: string[]): string | undefined {
-  return actorWids.find((wid) => wid.endsWith('@c.us')) ?? actorWids.find((wid) => wid.endsWith('@lid')) ?? actorWids[0];
+function requirePiwigoActor(ctx: CommandContext): NonNullable<CommandContext['actor']> {
+  if (!ctx.actor) {
+    throw new Error('Authoritative identity address is required for the Piwigo command.');
+  }
+  return ctx.actor;
 }
 
 async function galleryTargetLabel(context: PluginCommandContext, groupWid: string): Promise<string> {
   const metadata = await context.getGroupMetadataSnapshot?.(groupWid).catch(() => undefined);
   return metadata?.displayName?.trim() || groupWid;
-}
-
-function isPhoneWid(wid: string): boolean {
-  return /^\d+@c\.us$/i.test(wid.trim());
 }
 
 function uniqueWids(wids: Array<string | null | undefined>): string[] {
@@ -659,8 +653,8 @@ async function startUploadFlow(
     const client = new PiwigoGalleryClient(target.connection);
     stage = 'accepted-types';
     const acceptedTypes = await client.acceptedTypes();
-    const privateActorWid = piwigoPrivateChatWid(actorWids, ctx.actor?.wid ?? ctx.message.senderWid) ?? ctx.message.senderWid;
-    const privateDeliveryFallback = piwigoPrivateFlowDeliveryFallback(ctx, actorWids);
+    const privateActorWid = piwigoPrivateChatWid(ctx);
+    const privateDeliveryFallback = piwigoPrivateFlowDeliveryFallback(ctx);
     stage = 'private-flow';
     const flowStart = await context.flowEngine.startPrivateContinuation({
       definition,

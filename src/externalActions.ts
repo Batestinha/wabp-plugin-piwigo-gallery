@@ -4,6 +4,7 @@ import type { TranslateFn } from '../../../platform/i18n';
 import { enqueuePluginJob } from '../../../platform/jobs/queue';
 import type { PluginExternalActionRegistration } from '../../../platform/pluginRuntime/pluginExternalActions';
 import type { PluginExternalActionRegistrationContext } from '../../../platform/pluginRuntime/types';
+import { identityAddressFromPhone } from '../../../platform/identity/identityAddressService';
 import { parsePiwigoGalleryConfig } from './config';
 import {
   linkChoiceCountForScopes,
@@ -226,7 +227,7 @@ class PiwigoGalleryExternalActionRuntime {
       throw httpError(403, 'WhatsApp identity is not a member of a Piwigo-enabled group.');
     }
     const linkChoiceCount = linkChoiceCountForScopes(scopes);
-    const whatsappAliases = await this.context.platform.contacts.getContactAliases(wid, signal).catch(() => [wid]);
+    const whatsappAliases = (await this.context.platform.contacts.resolveIdentityAddress(wid, signal)).aliases;
     throwIfAborted(signal);
     const now = new Date();
     const database = await this.database();
@@ -775,16 +776,20 @@ async function resolveKnownWhatsAppRegistrationWid(
 ): Promise<string> {
   throwIfAborted(signal);
   const candidateWid = normalizeRegistrationPhoneWid(phone);
-  if (await contacts.isKnownContact(candidateWid, signal)) return candidateWid;
-  const aliases = await contacts.getContactAliases(candidateWid, signal);
-  for (const alias of aliases) {
+  const identity = await contacts.resolveIdentityAddress(candidateWid, signal);
+  const authoritativeWids = [...new Set([
+    identity.deliveryChatId,
+    identity.canonicalWid,
+    identity.addressBookWid,
+    identity.lidWid,
+    identity.phoneWid,
+    ...identity.aliases
+  ].filter((wid): wid is string => Boolean(wid)))];
+  for (const alias of authoritativeWids) {
     if (alias && await contacts.isKnownContact(alias, signal)) return alias;
   }
-  const candidateDigits = phoneDigitsFromWid(candidateWid);
   const knownContacts = await contacts.getKnownContacts(signal);
-  const contact = knownContacts.find((row) =>
-    row.wid === candidateWid || aliases.includes(row.wid) || phoneDigitsFromWid(row.wid) === candidateDigits
-  );
+  const contact = knownContacts.find((row) => authoritativeWids.includes(row.wid));
   if (contact) return contact.wid;
   throw httpError(404, 'WhatsApp identity is not a known bot contact.');
 }
@@ -800,11 +805,7 @@ function normalizeRegistrationPhoneWid(phone: string): string {
   if (/^\d{7,15}@c\.us$/.test(trimmed)) return trimmed;
   const digits = trimmed.replace(/\D/g, '');
   if (!/^\d{7,15}$/.test(digits)) throw httpError(400, 'Invalid WhatsApp phone number.');
-  return `${digits}@c.us`;
-}
-
-function phoneDigitsFromWid(wid: string): string {
-  return wid.toLowerCase().match(/^(\d+)@c\.us$/)?.[1] ?? '';
+  return identityAddressFromPhone(digits)!;
 }
 
 function hashRegistrationOtp(requestId: string, otp: string): string {

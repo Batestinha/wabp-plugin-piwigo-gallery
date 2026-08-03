@@ -9,6 +9,12 @@ import type {
 import type { GalleryConnection, PiwigoGalleryConfig } from './config';
 import { configConnection } from './config';
 import { PIWIGO_GALLERY_DATABASE } from './manifest';
+import {
+  galleryAlbumSourceRef,
+  galleryAlbumSourceSnapshot,
+  parseGalleryAlbumSource,
+  type GalleryAlbumSource
+} from './albumMetadata';
 
 export type GalleryUploadBatchStatus =
   | 'collecting'
@@ -87,6 +93,7 @@ export interface GalleryUploadBatch {
   onde: string;
   quando: string;
   withUserIds: number[];
+  albumSource: GalleryAlbumSource;
   acceptedExtensions: string[];
   maxFileBytes: number;
   autoFinalizeMinutes: number;
@@ -228,6 +235,9 @@ interface BatchRow extends PluginDatabaseRow {
   onde: string;
   quando: string;
   with_user_ids_json: string;
+  source_kind: GalleryAlbumSource['kind'];
+  source_ref: string | null;
+  source_snapshot_json: string | null;
   accepted_extensions_json: string;
   max_file_bytes: number;
   auto_finalize_minutes: number;
@@ -2038,11 +2048,12 @@ function insertBatch(db: PluginDatabase, batch: GalleryUploadBatch): void {
     `INSERT INTO gallery_upload_batches (
       id, status, scope_id, group_id, group_wid, chat_id, collection_chat_id, actor_wid, actor_aliases_json,
       actor_identity_id, piwigo_linked_wid, actor_label, onde, quando, with_user_ids_json,
+      source_kind, source_ref, source_snapshot_json,
       accepted_extensions_json, max_file_bytes, auto_finalize_minutes, created_at, updated_at,
       auto_finalize_at, last_accepted_at, deadline_generation, version,
       finalization_claim_id, finalization_claimed_at, finalization_claim_expires_at,
       album_label, error
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     batch.id,
     batch.status,
     batch.scopeId,
@@ -2058,6 +2069,9 @@ function insertBatch(db: PluginDatabase, batch: GalleryUploadBatch): void {
     batch.onde,
     batch.quando,
     JSON.stringify(uniqueNumbers(batch.withUserIds)),
+    batch.albumSource.kind,
+    galleryAlbumSourceRef(batch.albumSource) ?? null,
+    galleryAlbumSourceSnapshot(batch.albumSource) ?? null,
     JSON.stringify(uniqueStrings(batch.acceptedExtensions)),
     batch.maxFileBytes,
     batch.autoFinalizeMinutes,
@@ -2152,6 +2166,11 @@ function batchFromRow(db: PluginDatabase, row: BatchRow): StoredGalleryUploadBat
     onde: row.onde,
     quando: row.quando,
     withUserIds: parseJsonArray(row.with_user_ids_json, z.number().int()),
+    albumSource: parseGalleryAlbumSource({
+      kind: row.source_kind,
+      ref: row.source_ref,
+      snapshotJson: row.source_snapshot_json
+    }),
     acceptedExtensions: parseJsonArray(row.accepted_extensions_json, z.string()),
     maxFileBytes: row.max_file_bytes,
     autoFinalizeMinutes: row.auto_finalize_minutes,
@@ -2586,6 +2605,7 @@ function importLegacyRecord(db: PluginDatabase, row: LegacyPluginDataRecord, imp
       db.transaction(() => insertBatch(db, {
         ...parsed.data,
         status,
+        albumSource: { kind: 'manual' },
         groupWid,
         chatId: groupWid,
         collectionChatId: parsed.data.collectionChatId ?? groupWid,

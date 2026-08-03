@@ -18,6 +18,7 @@ import {
 import {
   PiwigoApiError,
   PiwigoGalleryClient,
+  supportsPiwigoEventAlbumSource,
   supportsPiwigoUploadIdempotency
 } from './piwigoClient';
 import {
@@ -549,6 +550,7 @@ async function finalizeBatch(
 
   const client = new PiwigoGalleryClient(connection);
   let uploadIdempotencySupported: boolean | undefined;
+  let eventAlbumSourceSupported: boolean | undefined;
   for (const file of batch.files) {
     if (file.status === 'uploaded') {
       continue;
@@ -623,6 +625,7 @@ async function finalizeBatch(
       try {
         const status = await withBatchLeaseHeartbeat(db, batch, claimId, () => client.status());
         uploadIdempotencySupported = supportsPiwigoUploadIdempotency(status);
+        eventAlbumSourceSupported = supportsPiwigoEventAlbumSource(status);
       } catch (error) {
         if (isAmbiguousPiwigoOutcome(error)) {
           return deferAmbiguousBatchUpload(context, db, batch, activeFile, claimId, error);
@@ -652,6 +655,21 @@ async function finalizeBatch(
         'Piwigo did not advertise upload idempotency; upload was not attempted.'
       );
     }
+    if (batch.albumSource.kind === 'community-event' && !eventAlbumSourceSupported) {
+      return failBatch(
+        context,
+        db,
+        batch,
+        claimId,
+        await t(
+          context,
+          batch.scopeId,
+          batch.actorWid,
+          'official.piwigo-gallery.error.eventAlbumSourceUnsupported'
+        ),
+        'Piwigo did not advertise event album source support; upload was not attempted.'
+      );
+    }
     try {
       const result = await withBatchLeaseHeartbeat(db, batch, claimId, () =>
         client.uploadForJid({
@@ -661,6 +679,7 @@ async function finalizeBatch(
           onde: batch.onde,
           quando: batch.quando,
           withUserIds: batch.withUserIds,
+          albumSource: batch.albumSource,
           filename: activeFile.filename,
           mimeType: activeFile.mimeType,
           buffer: stored.buffer

@@ -1,9 +1,19 @@
 import type { CommandMetadata, CommandTargetSpec } from '../../../adminBot/router/commandMetadata';
 import type { CommandContext } from '../../../adminBot/router/commandRouter';
 import type { TranslateFn } from '../../../platform/i18n';
+import { logger } from '../../../platform/logging/logger';
 import type { PluginCancellationRegistration, PluginCancellationRequest, PluginCommandContext } from '../../../platform/pluginRuntime/types';
 import type { PrivateDeliveryFallback } from '../../../platform/transport/transportTypes';
 import { requireIdentityAddress } from '../../../platform/identity/messageActor';
+import {
+  EVENT_ALBUM_SOURCE_LIST_METHOD,
+  EVENT_ALBUM_SOURCE_RESOLVE_METHOD,
+  EVENT_ALBUM_SOURCE_SERVICE_ID,
+  type EventAlbumSource,
+  type EventAlbumSourceListOutput,
+  type EventAlbumSourceResolveOutput
+} from '../community-events/serviceApi';
+import { EVENTS_PLUGIN_ID } from '../community-events/manifest';
 import {
   commandText,
   parseBoolean,
@@ -35,6 +45,7 @@ import {
 import {
   PiwigoApiError,
   PiwigoGalleryClient,
+  supportsPiwigoEventAlbumSource,
   type PiwigoPeopleResult
 } from './piwigoClient';
 import {
@@ -652,7 +663,10 @@ async function startUploadFlow(
   try {
     const client = new PiwigoGalleryClient(target.connection);
     stage = 'accepted-types';
-    const acceptedTypes = await client.acceptedTypes();
+    const [acceptedTypes, eventCandidates] = await Promise.all([
+      client.acceptedTypes(),
+      galleryEventCandidates(context, client, target, ctx)
+    ]);
     const privateActorWid = piwigoPrivateChatWid(ctx);
     const privateDeliveryFallback = piwigoPrivateFlowDeliveryFallback(ctx);
     stage = 'private-flow';
@@ -664,8 +678,10 @@ async function startUploadFlow(
       initialData: galleryUploadFlowInitialData({
         t,
         people: target.actor.peopleResult.people,
+        eventCandidates,
         targetLabel: target.label
       }),
+      startStepId: eventCandidates.length > 0 ? 'source' : 'onde',
       ...(privateDeliveryFallback ? { privateDeliveryFallback } : {}),
       onSessionCreated: (session) => {
         createdFlowSessionId = session.id;
@@ -1035,6 +1051,32 @@ function registerUploadFlowCompletionHandler(context: PluginCommandContext): voi
       await context.flowEngine.acknowledgePromptLock(lock.flowPromptId);
       return true;
     }
+    if (!existingBatch && answers.albumSource.kind === 'community-event') {
+      if (!draft) {
+        return false;
+      }
+      const validation = await validateGalleryEventSource(context, {
+        scopeId: snapshot.scopeId,
+        actorWid: draft.actorWid,
+        groupId: draft.groupId,
+        groupWid: draft.groupWid,
+        source: answers.albumSource
+      });
+      if (validation !== 'valid') {
+        if (draft) {
+          await activeTransport.sendText(
+            snapshot.conversationChatId ?? draft.collectionChatId ?? draft.chatId,
+            t(validation === 'changed'
+              ? 'official.piwigo-gallery.flow.eventChanged'
+              : 'official.piwigo-gallery.flow.eventUnavailable'),
+            { idempotencyKey: `piwigo-gallery:flow:${lock.flowSessionId}:event-${validation}` }
+          );
+          deleteDraft(db, draft.scopeId, draft.flowSessionId);
+        }
+        await context.flowEngine.acknowledgePromptLock(lock.flowPromptId);
+        return true;
+      }
+    }
     let stored = existingBatch;
     if (!stored) {
       if (!draft) {
@@ -1058,6 +1100,7 @@ function registerUploadFlowCompletionHandler(context: PluginCommandContext): voi
         onde: answers.onde,
         quando: answers.quando,
         withUserIds: answers.withUserIds,
+        albumSource: answers.albumSource,
         acceptedExtensions: draft.acceptedExtensions,
         maxFileBytes: draft.maxFileBytes,
         autoFinalizeMinutes: draft.autoFinalizeMinutes,
@@ -1096,6 +1139,81 @@ function registerUploadFlowCompletionHandler(context: PluginCommandContext): voi
     await context.flowEngine.acknowledgePromptLock(lock.flowPromptId);
     return true;
   }, { recoverLocked: true });
+}
+
+async function galleryEventCandidates(
+  context: PluginCommandContext,
+  client: PiwigoGalleryClient,
+  target: GalleryUploadTarget,
+  ctx: CommandContext
+): Promise<EventAlbumSource[]> {
+  if (!context.services || !context.catalog) {
+    return [];
+  }
+  try {
+    if (!await context.catalog.enabledFor(EVENTS_PLUGIN_ID, target.scopeId)) {
+      return [];
+    }
+    const status = await client.status();
+    if (!supportsPiwigoEventAlbumSource(status)) {
+      return [];
+    }
+    const output = await context.services.call<EventAlbumSourceListOutput>({
+      serviceId: EVENT_ALBUM_SOURCE_SERVICE_ID,
+      method: EVENT_ALBUM_SOURCE_LIST_METHOD,
+      scopeId: target.scopeId,
+      actorWid: ctx.message.senderWid,
+      ...(target.groupId ? { groupId: target.groupId } : {}),
+      groupWid: target.groupWid,
+      managementMode: target.managementMode,
+      input: { referenceTime: new Date().toISOString() }
+    });
+    return output.candidates;
+  } catch (error) {
+    logger.warn({
+      error,
+      scopeId: target.scopeId,
+      actorWid: ctx.message.senderWid
+    }, 'Piwigo event album sources are unavailable; continuing with manual album setup');
+    return [];
+  }
+}
+
+async function validateGalleryEventSource(
+  context: PluginCommandContext,
+  input: {
+    scopeId: string;
+    actorWid?: string | undefined;
+    groupId?: string | undefined;
+    groupWid?: string | undefined;
+    source: Extract<GalleryUploadBatch['albumSource'], { kind: 'community-event' }>;
+  }
+): Promise<'valid' | 'changed' | 'unavailable'> {
+  if (!context.services) {
+    return 'unavailable';
+  }
+  try {
+    const output = await context.services.call<EventAlbumSourceResolveOutput>({
+      serviceId: EVENT_ALBUM_SOURCE_SERVICE_ID,
+      method: EVENT_ALBUM_SOURCE_RESOLVE_METHOD,
+      scopeId: input.scopeId,
+      ...(input.actorWid ? { actorWid: input.actorWid } : {}),
+      ...(input.groupId ? { groupId: input.groupId } : {}),
+      ...(input.groupWid ? { groupWid: input.groupWid } : {}),
+      input: { eventId: input.source.eventId }
+    });
+    if (output.kind !== 'found') {
+      return 'unavailable';
+    }
+    return output.event.revision === input.source.revision ? 'valid' : 'changed';
+  } catch (error) {
+    logger.warn({
+      error,
+      scopeId: input.scopeId,
+      eventId: input.source.eventId
+    }, 'Could not revalidate the selected Piwigo event album source');
+    return 'unavailable';
+  }
 }
 
 function enqueueGalleryBatchFinalization(

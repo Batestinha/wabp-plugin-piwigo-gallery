@@ -1,5 +1,6 @@
 import type { GalleryConnection } from './config';
 import { z } from 'zod';
+import type { GalleryAlbumSource } from './albumMetadata';
 
 export interface PiwigoAcceptedTypes {
   extensions: string[];
@@ -23,6 +24,7 @@ export interface PiwigoStatusResult {
   upload_idempotency?: boolean | undefined;
   capabilities?: {
     upload_idempotency?: boolean | undefined;
+    event_album_source_v1?: boolean | undefined;
   } | undefined;
 }
 
@@ -75,7 +77,8 @@ const statusSchema = z.object({
   version: z.string().trim().min(1).optional(),
   upload_idempotency: z.boolean().optional(),
   capabilities: z.object({
-    upload_idempotency: z.boolean().optional()
+    upload_idempotency: z.boolean().optional(),
+    event_album_source_v1: z.boolean().optional()
   }).passthrough().optional()
 }).passthrough();
 
@@ -149,6 +152,10 @@ export function supportsPiwigoUploadIdempotency(status: PiwigoStatusResult): boo
   );
 }
 
+export function supportsPiwigoEventAlbumSource(status: PiwigoStatusResult): boolean {
+  return status.ok === true && status.capabilities?.event_album_source_v1 === true;
+}
+
 export class PiwigoGalleryClient {
   constructor(
     private readonly connection: GalleryConnection,
@@ -214,6 +221,7 @@ export class PiwigoGalleryClient {
     onde: string;
     quando: string;
     withUserIds: number[];
+    albumSource: GalleryAlbumSource;
     filename: string;
     mimeType: string;
     buffer: Buffer;
@@ -227,6 +235,12 @@ export class PiwigoGalleryClient {
     form.set('onde', input.onde);
     form.set('quando', input.quando);
     form.set('with_user_ids', input.withUserIds.join(','));
+    if (input.albumSource.kind === 'community-event') {
+      form.set('source_kind', input.albumSource.kind);
+      form.set('source_ref', input.albumSource.eventId);
+      form.set('source_revision', input.albumSource.revision);
+      form.set('source_label', input.albumSource.title);
+    }
     const blob = new Blob([new Uint8Array(input.buffer)], { type: input.mimeType });
     form.set('image', blob, input.filename);
     return this.request('wabp.piwigo.media.uploadForJid', form, uploadResultSchema);

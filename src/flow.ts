@@ -2,21 +2,35 @@ import type { FlowDefinition } from '../../../adminBot/flows/flowTypes';
 import type { FlowSessionSnapshot } from '../../../adminBot/flows/flowEngine';
 import type { TranslateFn } from '../../../platform/i18n';
 import type { PiwigoPerson } from './piwigoClient';
+import type { EventAlbumSource } from '../community-events/serviceApi';
+import { manualGalleryAlbumSource, type GalleryAlbumSource } from './albumMetadata';
 
 export const PIWIGO_GALLERY_UPLOAD_FLOW_TYPE = 'official.piwigo-gallery.upload.v1';
 
 interface GalleryFlowCopy {
+  source?: string | undefined;
+  sourceManual?: string | undefined;
+  sourceEvent?: string | undefined;
+  event?: string | undefined;
   where: string;
   when: string;
   with: string;
   confirm: string;
+  confirmWhere?: string | undefined;
+  confirmWhen?: string | undefined;
+  confirmEvent?: string | undefined;
   yes: string;
   no: string;
+}
+
+interface GalleryEventCandidate extends EventAlbumSource {
+  label: string;
 }
 
 interface GalleryFlowStateData {
   copy: GalleryFlowCopy;
   people: PiwigoPerson[];
+  eventCandidates: GalleryEventCandidate[];
   targetLabel?: string | undefined;
 }
 
@@ -31,6 +45,44 @@ export function createGalleryUploadFlowDefinition(input: {
     timeoutMinutes: 30,
     completionReply: false,
     steps: {
+      source: {
+        id: 'source',
+        kind: 'choice',
+        prompt: input.t('official.piwigo-gallery.flow.source'),
+        promptForState: (state) => galleryFlowStateData(state.data)?.copy.source
+          ?? input.t('official.piwigo-gallery.flow.source'),
+        optionsForState: (state) => {
+          const copy = galleryFlowStateData(state.data)?.copy;
+          return [
+            {
+              label: copy?.sourceManual ?? input.t('official.piwigo-gallery.flow.source.manual'),
+              value: 'manual'
+            },
+            {
+              label: copy?.sourceEvent ?? input.t('official.piwigo-gallery.flow.source.event'),
+              value: 'community-event'
+            }
+          ];
+        },
+        minSelections: 1,
+        maxSelections: 1,
+        nextStepIdByValue: {
+          manual: 'onde',
+          'community-event': 'event'
+        }
+      },
+      event: {
+        id: 'event',
+        kind: 'choice',
+        prompt: input.t('official.piwigo-gallery.flow.event'),
+        promptForState: (state) => galleryFlowStateData(state.data)?.copy.event
+          ?? input.t('official.piwigo-gallery.flow.event'),
+        optionsForState: (state) => (galleryFlowStateData(state.data)?.eventCandidates ?? [])
+          .map((event) => ({ label: event.label, value: event.eventId })),
+        minSelections: 1,
+        maxSelections: 1,
+        nextStepId: 'com'
+      },
       onde: {
         id: 'onde',
         kind: 'text',
@@ -63,7 +115,7 @@ export function createGalleryUploadFlowDefinition(input: {
         id: 'confirmar',
         kind: 'choice',
         prompt: input.t('official.piwigo-gallery.flow.confirm'),
-        promptForState: (state) => galleryFlowStateData(state.data)?.copy.confirm
+        promptForState: (state) => galleryConfirmationPrompt(state.data)
           ?? input.t('official.piwigo-gallery.flow.confirm'),
         optionsForState: (state) => {
           const copy = galleryFlowStateData(state.data)?.copy;
@@ -82,19 +134,36 @@ export function createGalleryUploadFlowDefinition(input: {
 export function galleryUploadFlowInitialData(input: {
   t: TranslateFn;
   people: PiwigoPerson[];
+  eventCandidates?: EventAlbumSource[] | undefined;
   targetLabel?: string | undefined;
 }): Record<string, unknown> {
   return {
     gallery: {
       copy: {
+        source: input.t('official.piwigo-gallery.flow.source'),
+        sourceManual: input.t('official.piwigo-gallery.flow.source.manual'),
+        sourceEvent: input.t('official.piwigo-gallery.flow.source.event'),
+        event: input.t('official.piwigo-gallery.flow.event'),
         where: input.t('official.piwigo-gallery.flow.where'),
         when: input.t('official.piwigo-gallery.flow.when'),
         with: input.t('official.piwigo-gallery.flow.with'),
         confirm: input.t('official.piwigo-gallery.flow.confirm'),
+        confirmWhere: input.t('official.piwigo-gallery.flow.confirm.where'),
+        confirmWhen: input.t('official.piwigo-gallery.flow.confirm.when'),
+        confirmEvent: input.t('official.piwigo-gallery.flow.confirm.event'),
         yes: input.t('official.piwigo-gallery.flow.yes'),
         no: input.t('official.piwigo-gallery.flow.no')
       },
       people: input.people.map((person) => ({ id: person.id, label: person.label })),
+      eventCandidates: (input.eventCandidates ?? []).map((event) => ({
+        ...event,
+        label: input.t('official.piwigo-gallery.flow.event.choice', {
+          title: event.title,
+          date: displayDate(event.localDate),
+          place: event.place,
+          eventId: event.eventId
+        })
+      })),
       ...(input.targetLabel?.trim() ? { targetLabel: input.targetLabel.trim() } : {})
     } satisfies GalleryFlowStateData
   };
@@ -125,15 +194,42 @@ export function galleryFlowAnswers(snapshot: FlowSessionSnapshot): {
   onde: string;
   quando: string;
   withUserIds: number[];
+  albumSource: GalleryAlbumSource;
 } | undefined {
-  const onde = typeof snapshot.state.data.onde === 'string' ? snapshot.state.data.onde.trim() : '';
-  const quando = typeof snapshot.state.data.quando === 'string' ? snapshot.state.data.quando.trim() : '';
+  const gallery = galleryFlowStateData(snapshot.state.data);
+  const source = selectedValue(snapshot.state.data.source) ?? 'manual';
+  let onde = typeof snapshot.state.data.onde === 'string' ? snapshot.state.data.onde.trim() : '';
+  let quando = typeof snapshot.state.data.quando === 'string' ? snapshot.state.data.quando.trim() : '';
+  let albumSource = manualGalleryAlbumSource();
+  if (source === 'community-event') {
+    const eventId = selectedValue(snapshot.state.data.event);
+    const event = gallery?.eventCandidates.find((candidate) => candidate.eventId === eventId);
+    if (!event) {
+      return undefined;
+    }
+    onde = event.place;
+    quando = displayDate(event.localDate);
+    albumSource = {
+      kind: 'community-event',
+      eventId: event.eventId,
+      revision: event.revision,
+      title: event.title,
+      startsAt: event.startsAt,
+      localDate: event.localDate,
+      ...(event.localTime ? { localTime: event.localTime } : {}),
+      timezone: event.timezone,
+      place: event.place,
+      eventStatus: event.eventStatus
+    };
+  } else if (source !== 'manual') {
+    return undefined;
+  }
   const rawWith = Array.isArray(snapshot.state.data.com) ? snapshot.state.data.com : [];
   const withUserIds = rawWith.map((entry) => Number(entry)).filter((entry) => Number.isSafeInteger(entry) && entry > 0);
   if (!onde || !/^\d{2}-\d{2}-\d{4}$/.test(quando) || withUserIds.length === 0) {
     return undefined;
   }
-  return { onde, quando, withUserIds };
+  return { onde, quando, withUserIds, albumSource };
 }
 
 function galleryFlowStateData(data: Record<string, unknown>): GalleryFlowStateData | undefined {
@@ -161,10 +257,79 @@ function galleryFlowStateData(data: Record<string, unknown>): GalleryFlowStateDa
   if (people.length === 0) {
     return undefined;
   }
+  const eventCandidates = Array.isArray(gallery.eventCandidates)
+    ? gallery.eventCandidates.flatMap((event) => {
+        const parsed = eventCandidate(event);
+        return parsed ? [parsed] : [];
+      })
+    : [];
   const targetLabel = typeof gallery.targetLabel === 'string' ? gallery.targetLabel.trim() : '';
   return {
     copy: copy as unknown as GalleryFlowCopy,
     people,
+    eventCandidates,
     ...(targetLabel ? { targetLabel } : {})
   };
+}
+
+function galleryConfirmationPrompt(data: Record<string, unknown>): string | undefined {
+  const gallery = galleryFlowStateData(data);
+  if (!gallery) {
+    return undefined;
+  }
+  const source = selectedValue(data.source) ?? 'manual';
+  const eventId = selectedValue(data.event);
+  const event = gallery.eventCandidates.find((candidate) => candidate.eventId === eventId);
+  const onde = source === 'community-event'
+    ? event?.place
+    : typeof data.onde === 'string' ? data.onde.trim() : undefined;
+  const quando = source === 'community-event'
+    ? event ? displayDate(event.localDate) : undefined
+    : typeof data.quando === 'string' ? data.quando.trim() : undefined;
+  if (!onde || !quando) {
+    return gallery.copy.confirm;
+  }
+  if (!gallery.copy.confirmWhere || !gallery.copy.confirmWhen) {
+    return gallery.copy.confirm;
+  }
+  return [
+    gallery.copy.confirm,
+    '',
+    ...(event ? [`${gallery.copy.confirmEvent ?? gallery.copy.event ?? gallery.copy.confirm}: ${event.title}`] : []),
+    `${gallery.copy.confirmWhere ?? gallery.copy.where}: ${onde}`,
+    `${gallery.copy.confirmWhen ?? gallery.copy.when}: ${quando}`
+  ].join('\n');
+}
+
+function eventCandidate(input: unknown): GalleryEventCandidate | undefined {
+  if (typeof input !== 'object' || input === null) {
+    return undefined;
+  }
+  const candidate = input as Record<string, unknown>;
+  if (
+    typeof candidate.eventId !== 'string'
+    || typeof candidate.revision !== 'string'
+    || typeof candidate.title !== 'string'
+    || typeof candidate.startsAt !== 'string'
+    || typeof candidate.localDate !== 'string'
+    || typeof candidate.timezone !== 'string'
+    || typeof candidate.place !== 'string'
+    || typeof candidate.label !== 'string'
+    || (candidate.eventStatus !== 'active' && candidate.eventStatus !== 'completed')
+  ) {
+    return undefined;
+  }
+  return candidate as unknown as GalleryEventCandidate;
+}
+
+function selectedValue(value: unknown): string | undefined {
+  if (Array.isArray(value)) {
+    return typeof value[0] === 'string' ? value[0] : undefined;
+  }
+  return typeof value === 'string' ? value : undefined;
+}
+
+function displayDate(localDate: string): string {
+  const match = localDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return match ? `${match[3]}-${match[2]}-${match[1]}` : '';
 }

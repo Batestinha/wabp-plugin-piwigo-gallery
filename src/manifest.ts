@@ -33,7 +33,7 @@ export const piwigoGalleryDatabases = [{
 export const piwigoGalleryManifest: PluginManifest = {
   pluginId: PIWIGO_GALLERY_PLUGIN_ID,
   kind: 'managed_group',
-  version: '0.2.0',
+  version: '0.3.0',
   coreApiRange: '>=0.2.0',
   messageNamespace: 'official.piwigo-gallery',
   descriptionKey: 'official.piwigo-gallery.description',
@@ -130,41 +130,47 @@ export const piwigoGalleryManifest: PluginManifest = {
       actionId: PIWIGO_GALLERY_EXTERNAL_ACTIONS.whatsappLinkRequestStart,
       access: 'mutation',
       scope: 'account',
+      timeoutMs: 30_000,
       description: 'Start a Piwigo account-link request through a known WhatsApp contact.'
     },
     {
       actionId: PIWIGO_GALLERY_EXTERNAL_ACTIONS.whatsappRegistrationOtpStart,
       access: 'mutation',
       scope: 'account',
+      timeoutMs: 30_000,
       description: 'Send and persist a WhatsApp registration OTP.'
     },
     {
       actionId: PIWIGO_GALLERY_EXTERNAL_ACTIONS.whatsappRegistrationOtpVerify,
       access: 'mutation',
       scope: 'account',
+      timeoutMs: 30_000,
       description: 'Verify and consume a WhatsApp registration OTP.'
     },
     {
       actionId: PIWIGO_GALLERY_EXTERNAL_ACTIONS.authCodeSend,
       access: 'mutation',
       scope: 'scope',
+      timeoutMs: 30_000,
       description: 'Deliver a scoped Piwigo authentication code through WhatsApp.'
     },
     {
       actionId: PIWIGO_GALLERY_EXTERNAL_ACTIONS.eligibleScopesResolve,
       access: 'read',
       scope: 'account',
+      timeoutMs: 30_000,
       description: 'Resolve Piwigo-enabled scopes available to a WhatsApp identity.'
     },
     {
       actionId: PIWIGO_GALLERY_EXTERNAL_ACTIONS.albumUploadObserved,
       access: 'mutation',
       scope: 'scope',
+      timeoutMs: 30_000,
       description: 'Observe a scoped Piwigo album upload and schedule its WhatsApp announcement.'
     }
   ],
   databases: piwigoGalleryDatabases,
-  dataVersion: '2',
+  dataVersion: '4',
   cancellation: {
     workflows: [
       {
@@ -183,7 +189,7 @@ export const piwigoGalleryManifest: PluginManifest = {
         mode: 'plugin-handler',
         scope: 'actor-chat',
         commands: ['/send gallery', '/upload'],
-        cancellableStates: ['collecting', 'uploading'],
+        cancellableStates: ['collecting'],
         terminalStates: ['completed', 'cancelled', 'expired', 'failed'],
         effects: ['delete-staged-media', 'clear-active-batch'],
         auditAction: 'piwigo-gallery.upload.cancel'

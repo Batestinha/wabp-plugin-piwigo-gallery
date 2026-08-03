@@ -51,11 +51,18 @@ export interface GalleryBatchFile {
   filename: string;
   mimeType: string;
   sizeBytes: number;
-  status: 'staged' | 'uploaded';
+  status: 'staged' | 'uploading' | 'uploaded';
   acceptedAt?: string | undefined;
+  uploadAttemptId?: string | undefined;
+  uploadStartedAt?: string | undefined;
+  uploadRetryCount?: number | undefined;
+  uploadNextRetryAt?: string | undefined;
+  uploadLastError?: string | undefined;
   imageId?: number | undefined;
   url?: string | undefined;
   uploadedAt?: string | undefined;
+  cleanupPending?: boolean | undefined;
+  cleanupCompletedAt?: string | undefined;
 }
 
 export interface GalleryUploadBatch {
@@ -90,6 +97,16 @@ export interface GalleryUploadBatch {
   finalizationClaimExpiresAt?: string | undefined;
   albumLabel?: string | undefined;
   error?: string | undefined;
+  terminalNotification?: GalleryBatchTerminalNotification | undefined;
+}
+
+export interface GalleryBatchTerminalNotification {
+  text: string;
+  status: 'pending' | 'dispatching' | 'delivered';
+  deliveryKey: string;
+  attemptId?: string | undefined;
+  startedAt?: string | undefined;
+  deliveredAt?: string | undefined;
 }
 
 export interface StoredGalleryUploadBatch extends GalleryUploadBatch {
@@ -116,17 +133,24 @@ export interface GalleryLinkRequest {
 }
 
 export interface PiwigoAlbumAnnouncementFile {
+  position?: number | undefined;
   imageId?: number | undefined;
   fileId?: string | undefined;
   downloadToken?: string | undefined;
   filename: string;
   mimeType: string;
+  deliveryStatus?: 'pending' | 'dispatching' | 'delivered' | undefined;
+  deliveryClaimId?: string | undefined;
+  deliveryStartedAt?: string | undefined;
+  deliveredAt?: string | undefined;
 }
 
 export interface PiwigoAlbumAnnouncement {
   id: string;
   dedupeKey: string;
   scopeId: string;
+  /** Resolved physical WhatsApp group captured when the callback is accepted. */
+  announcementGroupWid?: string | undefined;
   albumId?: string | undefined;
   albumName: string;
   siteLabel: string;
@@ -139,10 +163,14 @@ export interface PiwigoAlbumAnnouncement {
   announcedAt?: string | undefined;
   claimId?: string | undefined;
   claimExpiresAt?: string | undefined;
+  downloadRetryCount?: number | undefined;
+  downloadNextRetryAt?: string | undefined;
+  downloadLastError?: string | undefined;
   version?: number | undefined;
 }
 
 export interface StoredPiwigoAlbumAnnouncement extends PiwigoAlbumAnnouncement {
+  downloadRetryCount: number;
   version: number;
 }
 
@@ -151,6 +179,7 @@ export interface GalleryRegistrationOtpRequest {
   wid: string;
   displayName?: string | undefined;
   otpHash: string;
+  status?: 'active' | 'consumed' | 'locked' | 'expired' | undefined;
   expiresAt: string;
   attempts: number;
   createdAt: string;
@@ -205,6 +234,12 @@ interface BatchRow extends PluginDatabaseRow {
   finalization_claim_expires_at: string | null;
   album_label: string | null;
   error: string | null;
+  terminal_notification_text: string | null;
+  terminal_notification_status: GalleryBatchTerminalNotification['status'] | null;
+  terminal_notification_delivery_key: string | null;
+  terminal_notification_attempt_id: string | null;
+  terminal_notification_started_at: string | null;
+  terminal_notification_delivered_at: string | null;
 }
 
 interface BatchFileRow extends PluginDatabaseRow {
@@ -218,7 +253,14 @@ interface BatchFileRow extends PluginDatabaseRow {
   image_id: number | null;
   url: string | null;
   accepted_at: string;
+  upload_attempt_id: string | null;
+  upload_started_at: string | null;
+  upload_retry_count: number;
+  upload_next_retry_at: string | null;
+  upload_last_error: string | null;
   uploaded_at: string | null;
+  cleanup_pending: number;
+  cleanup_completed_at: string | null;
 }
 
 interface LinkRequestRow extends PluginDatabaseRow {
@@ -246,6 +288,7 @@ interface AnnouncementRow extends PluginDatabaseRow {
   id: string;
   dedupe_key: string;
   scope_id: string;
+  announcement_group_wid: string | null;
   album_id: string | null;
   album_name: string;
   site_label: string;
@@ -257,15 +300,23 @@ interface AnnouncementRow extends PluginDatabaseRow {
   announced_at: string | null;
   claim_id: string | null;
   claim_expires_at: string | null;
+  download_retry_count: number;
+  download_next_retry_at: string | null;
+  download_last_error: string | null;
   version: number;
 }
 
 interface AnnouncementFileRow extends PluginDatabaseRow {
+  position: number;
   image_id: number | null;
   file_id: string | null;
   download_token: string | null;
   filename: string;
   mime_type: string;
+  delivery_status: NonNullable<PiwigoAlbumAnnouncementFile['deliveryStatus']>;
+  delivery_claim_id: string | null;
+  delivery_started_at: string | null;
+  delivered_at: string | null;
 }
 
 interface RegistrationOtpRow extends PluginDatabaseRow {
@@ -377,6 +428,12 @@ export function getDraft(
     scopeId
   );
   return row ? draftFromRow(row) : undefined;
+}
+
+export function listDrafts(db: PluginDatabase): StoredGalleryUploadDraft[] {
+  return db.all<DraftRow>(
+    'SELECT * FROM gallery_upload_drafts ORDER BY created_at ASC, flow_session_id ASC'
+  ).map(draftFromRow);
 }
 
 export function deleteDraft(db: PluginDatabase, scopeId: string, flowSessionId: string): number {
@@ -519,8 +576,9 @@ export function appendBatchFile(db: PluginDatabase, input: {
     db.run(
       `INSERT INTO gallery_upload_batch_files (
         batch_id, media_id, message_id, filename, mime_type, size_bytes, status,
-        image_id, url, accepted_at, uploaded_at
-      ) VALUES (?, ?, ?, ?, ?, ?, 'staged', NULL, NULL, ?, NULL)`,
+        image_id, url, accepted_at, upload_attempt_id, upload_started_at, uploaded_at,
+        cleanup_pending, cleanup_completed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 'staged', NULL, NULL, ?, NULL, NULL, NULL, 0, NULL)`,
       input.batchId,
       input.file.mediaId,
       input.file.messageId,
@@ -652,11 +710,225 @@ export type MarkBatchFileUploadedResult =
   | { kind: 'claim_lost'; batch: StoredGalleryUploadBatch }
   | { kind: 'file_missing'; batch: StoredGalleryUploadBatch };
 
+export type BeginBatchFileUploadResult =
+  | { kind: 'uploading'; batch: StoredGalleryUploadBatch; file: GalleryBatchFile }
+  | { kind: 'already_uploading'; batch: StoredGalleryUploadBatch; file: GalleryBatchFile }
+  | { kind: 'already_uploaded'; batch: StoredGalleryUploadBatch; file: GalleryBatchFile }
+  | { kind: 'missing' }
+  | { kind: 'claim_lost'; batch: StoredGalleryUploadBatch }
+  | { kind: 'file_missing'; batch: StoredGalleryUploadBatch };
+
+/**
+ * Persists the ambiguity boundary before the first byte is sent to Piwigo.
+ * An `uploading` file may be replayed only with this exact attempt ID after
+ * the remote advertises the matching idempotency contract.
+ */
+export function beginBatchFileUpload(db: PluginDatabase, input: {
+  scopeId: string;
+  batchId: string;
+  messageId: string;
+  claimId: string;
+  attemptId: string;
+  startedAt: string;
+}): BeginBatchFileUploadResult {
+  return db.transaction(() => {
+    const batch = getBatch(db, input.scopeId, input.batchId);
+    if (!batch) return { kind: 'missing' };
+    if (batch.status !== 'finalizing' || batch.finalizationClaimId !== input.claimId) {
+      return { kind: 'claim_lost', batch };
+    }
+    const file = batch.files.find((candidate) => candidate.messageId === input.messageId);
+    if (!file) return { kind: 'file_missing', batch };
+    if (file.status === 'uploaded') return { kind: 'already_uploaded', batch, file };
+    if (file.status === 'uploading') return { kind: 'already_uploading', batch, file };
+    const updatedFile = db.run(
+      `UPDATE gallery_upload_batch_files
+          SET status = 'uploading', upload_attempt_id = ?, upload_started_at = ?,
+              upload_retry_count = 0, upload_next_retry_at = NULL, upload_last_error = NULL
+        WHERE batch_id = ? AND message_id = ? AND status = 'staged'`,
+      input.attemptId,
+      input.startedAt,
+      input.batchId,
+      input.messageId
+    );
+    const updatedBatch = db.run(
+      `UPDATE gallery_upload_batches
+          SET updated_at = ?, version = version + 1
+        WHERE id = ? AND scope_id = ? AND status = 'finalizing'
+          AND finalization_claim_id = ? AND version = ?`,
+      input.startedAt,
+      input.batchId,
+      input.scopeId,
+      input.claimId,
+      batch.version
+    );
+    if (updatedFile.changes !== 1 || updatedBatch.changes !== 1) {
+      throw new GalleryStorageConflictError(`Gallery upload file ${input.messageId} changed while dispatching.`);
+    }
+    const stored = requireBatch(db, input.scopeId, input.batchId);
+    return {
+      kind: 'uploading',
+      batch: stored,
+      file: stored.files.find((candidate) => candidate.messageId === input.messageId)!
+    };
+  });
+}
+
+export type RecordBatchFileUploadFailureResult =
+  | { kind: 'recorded'; batch: StoredGalleryUploadBatch; file: GalleryBatchFile }
+  | { kind: 'missing' }
+  | { kind: 'claim_lost'; batch: StoredGalleryUploadBatch }
+  | { kind: 'file_missing'; batch: StoredGalleryUploadBatch }
+  | { kind: 'attempt_lost'; batch: StoredGalleryUploadBatch; file: GalleryBatchFile };
+
+/**
+ * Durably records an ambiguous remote outcome. When retryAt is present the
+ * current lease is released atomically so the scheduled retry can claim the
+ * batch without waiting for lease expiry.
+ */
+export function recordBatchFileUploadFailure(db: PluginDatabase, input: {
+  scopeId: string;
+  batchId: string;
+  messageId: string;
+  claimId: string;
+  attemptId: string;
+  failedAt: string;
+  error: string;
+  retryAt?: string | undefined;
+}): RecordBatchFileUploadFailureResult {
+  return db.transaction(() => {
+    const batch = getBatch(db, input.scopeId, input.batchId);
+    if (!batch) return { kind: 'missing' };
+    if (batch.status !== 'finalizing' || batch.finalizationClaimId !== input.claimId) {
+      return { kind: 'claim_lost', batch };
+    }
+    const file = batch.files.find((candidate) => candidate.messageId === input.messageId);
+    if (!file) return { kind: 'file_missing', batch };
+    if (file.status !== 'uploading' || file.uploadAttemptId !== input.attemptId) {
+      return { kind: 'attempt_lost', batch, file };
+    }
+    const updatedFile = db.run(
+      `UPDATE gallery_upload_batch_files
+          SET upload_retry_count = upload_retry_count + 1,
+              upload_next_retry_at = ?, upload_last_error = ?
+        WHERE batch_id = ? AND message_id = ? AND status = 'uploading'
+          AND upload_attempt_id = ?`,
+      input.retryAt ?? null,
+      input.error,
+      input.batchId,
+      input.messageId,
+      input.attemptId
+    );
+    const updatedBatch = db.run(
+      `UPDATE gallery_upload_batches
+          SET updated_at = ?, version = version + 1,
+              finalization_claim_id = CASE WHEN ? IS NULL THEN finalization_claim_id ELSE NULL END,
+              finalization_claimed_at = CASE WHEN ? IS NULL THEN finalization_claimed_at ELSE NULL END,
+              finalization_claim_expires_at = CASE WHEN ? IS NULL THEN finalization_claim_expires_at ELSE NULL END
+        WHERE id = ? AND scope_id = ? AND status = 'finalizing'
+          AND finalization_claim_id = ? AND version = ?`,
+      input.failedAt,
+      input.retryAt ?? null,
+      input.retryAt ?? null,
+      input.retryAt ?? null,
+      input.batchId,
+      input.scopeId,
+      input.claimId,
+      batch.version
+    );
+    if (updatedFile.changes !== 1 || updatedBatch.changes !== 1) {
+      throw new GalleryStorageConflictError(
+        `Gallery upload file ${input.messageId} changed while recording a retry.`
+      );
+    }
+    const stored = requireBatch(db, input.scopeId, input.batchId);
+    return {
+      kind: 'recorded',
+      batch: stored,
+      file: stored.files.find((candidate) => candidate.messageId === input.messageId)!
+    };
+  });
+}
+
+export type ReleaseBatchFinalizationClaimResult =
+  | { kind: 'released'; batch: StoredGalleryUploadBatch }
+  | { kind: 'missing' }
+  | { kind: 'claim_lost'; batch: StoredGalleryUploadBatch };
+
+export function releaseBatchFinalizationClaim(db: PluginDatabase, input: {
+  scopeId: string;
+  batchId: string;
+  claimId: string;
+  releasedAt: string;
+}): ReleaseBatchFinalizationClaimResult {
+  return db.transaction(() => {
+    const batch = getBatch(db, input.scopeId, input.batchId);
+    if (!batch) return { kind: 'missing' };
+    if (batch.status !== 'finalizing' || batch.finalizationClaimId !== input.claimId) {
+      return { kind: 'claim_lost', batch };
+    }
+    const updated = db.run(
+      `UPDATE gallery_upload_batches
+          SET finalization_claim_id = NULL, finalization_claimed_at = NULL,
+              finalization_claim_expires_at = NULL, updated_at = ?, version = version + 1
+        WHERE id = ? AND scope_id = ? AND status = 'finalizing'
+          AND finalization_claim_id = ? AND version = ?`,
+      input.releasedAt,
+      input.batchId,
+      input.scopeId,
+      input.claimId,
+      batch.version
+    );
+    if (updated.changes !== 1) {
+      return { kind: 'claim_lost', batch: requireBatch(db, input.scopeId, input.batchId) };
+    }
+    return { kind: 'released', batch: requireBatch(db, input.scopeId, input.batchId) };
+  });
+}
+
+export type RenewBatchFinalizationClaimResult =
+  | { kind: 'renewed'; batch: StoredGalleryUploadBatch }
+  | { kind: 'missing' }
+  | { kind: 'claim_lost'; batch: StoredGalleryUploadBatch };
+
+export function renewBatchFinalizationClaim(db: PluginDatabase, input: {
+  scopeId: string;
+  batchId: string;
+  claimId: string;
+  renewedAt: string;
+  claimExpiresAt: string;
+}): RenewBatchFinalizationClaimResult {
+  return db.transaction(() => {
+    const batch = getBatch(db, input.scopeId, input.batchId);
+    if (!batch) return { kind: 'missing' };
+    if (batch.status !== 'finalizing' || batch.finalizationClaimId !== input.claimId) {
+      return { kind: 'claim_lost', batch };
+    }
+    const updated = db.run(
+      `UPDATE gallery_upload_batches
+          SET finalization_claim_expires_at = ?, updated_at = ?, version = version + 1
+        WHERE id = ? AND scope_id = ? AND status = 'finalizing'
+          AND finalization_claim_id = ? AND version = ?`,
+      input.claimExpiresAt,
+      input.renewedAt,
+      input.batchId,
+      input.scopeId,
+      input.claimId,
+      batch.version
+    );
+    if (updated.changes !== 1) {
+      return { kind: 'claim_lost', batch: requireBatch(db, input.scopeId, input.batchId) };
+    }
+    return { kind: 'renewed', batch: requireBatch(db, input.scopeId, input.batchId) };
+  });
+}
+
 export function markBatchFileUploaded(db: PluginDatabase, input: {
   scopeId: string;
   batchId: string;
   messageId: string;
   claimId: string;
+  attemptId: string;
   imageId: number;
   url?: string | undefined;
   albumLabel?: string | undefined;
@@ -671,32 +943,179 @@ export function markBatchFileUploaded(db: PluginDatabase, input: {
     const file = batch.files.find((candidate) => candidate.messageId === input.messageId);
     if (!file) return { kind: 'file_missing', batch };
     if (file.status === 'uploaded') return { kind: 'already_uploaded', batch, file };
-    db.run(
+    if (file.status !== 'uploading' || file.uploadAttemptId !== input.attemptId) {
+      return { kind: 'claim_lost', batch };
+    }
+    const updatedFile = db.run(
       `UPDATE gallery_upload_batch_files
-          SET status = 'uploaded', image_id = ?, url = ?, uploaded_at = ?
-        WHERE batch_id = ? AND message_id = ? AND status = 'staged'`,
+          SET status = 'uploaded', image_id = ?, url = ?, uploaded_at = ?, cleanup_pending = 1,
+              cleanup_completed_at = NULL, upload_next_retry_at = NULL, upload_last_error = NULL
+        WHERE batch_id = ? AND message_id = ? AND status = 'uploading' AND upload_attempt_id = ?`,
       input.imageId,
       input.url ?? null,
       input.uploadedAt,
       input.batchId,
-      input.messageId
+      input.messageId,
+      input.attemptId
     );
-    db.run(
+    const updatedBatch = db.run(
       `UPDATE gallery_upload_batches
           SET album_label = COALESCE(?, album_label), updated_at = ?, version = version + 1
-        WHERE id = ? AND scope_id = ? AND status = 'finalizing' AND finalization_claim_id = ?`,
+        WHERE id = ? AND scope_id = ? AND status = 'finalizing' AND finalization_claim_id = ?
+          AND version = ?`,
       input.albumLabel ?? null,
       input.uploadedAt,
       input.batchId,
       input.scopeId,
-      input.claimId
+      input.claimId,
+      batch.version
     );
+    if (updatedFile.changes !== 1 || updatedBatch.changes !== 1) {
+      throw new GalleryStorageConflictError(`Gallery upload file ${input.messageId} changed while acknowledging upload.`);
+    }
     const stored = requireBatch(db, input.scopeId, input.batchId);
     return {
       kind: 'uploaded',
       batch: stored,
       file: stored.files.find((candidate) => candidate.messageId === input.messageId)!
     };
+  });
+}
+
+export function completeBatchFileCleanup(db: PluginDatabase, input: {
+  scopeId: string;
+  batchId: string;
+  messageId: string;
+  completedAt: string;
+}): boolean {
+  return db.transaction(() => {
+    const batch = getBatch(db, input.scopeId, input.batchId);
+    if (!batch) return false;
+    const cleaned = db.run(
+      `UPDATE gallery_upload_batch_files
+          SET cleanup_pending = 0, cleanup_completed_at = ?
+        WHERE batch_id = ? AND message_id = ? AND cleanup_pending = 1`,
+      input.completedAt,
+      input.batchId,
+      input.messageId
+    );
+    if (cleaned.changes === 1) {
+      db.run(
+        `UPDATE gallery_upload_batches SET version = version + 1, updated_at = ?
+          WHERE id = ? AND scope_id = ?`,
+        input.completedAt,
+        input.batchId,
+        input.scopeId
+      );
+    }
+    return cleaned.changes === 1;
+  });
+}
+
+export function batchFilesPendingCleanup(
+  db: PluginDatabase,
+  scopeId: string,
+  batchId: string
+): GalleryBatchFile[] {
+  return getBatch(db, scopeId, batchId)?.files.filter((file) => file.cleanupPending) ?? [];
+}
+
+export type BeginBatchTerminalNotificationResult =
+  | { kind: 'dispatching'; batch: StoredGalleryUploadBatch; notification: GalleryBatchTerminalNotification }
+  | { kind: 'missing' }
+  | { kind: 'not_terminal'; batch: StoredGalleryUploadBatch }
+  | { kind: 'no_notification'; batch: StoredGalleryUploadBatch }
+  | { kind: 'already_delivered'; batch: StoredGalleryUploadBatch; notification: GalleryBatchTerminalNotification };
+
+export function beginBatchTerminalNotification(db: PluginDatabase, input: {
+  scopeId: string;
+  batchId: string;
+  attemptId: string;
+  startedAt: string;
+}): BeginBatchTerminalNotificationResult {
+  return db.transaction(() => {
+    const batch = getBatch(db, input.scopeId, input.batchId);
+    if (!batch) return { kind: 'missing' };
+    if (!isTerminalBatchStatus(batch.status)) return { kind: 'not_terminal', batch };
+    if (!batch.terminalNotification) return { kind: 'no_notification', batch };
+    if (batch.terminalNotification.status === 'delivered') {
+      return { kind: 'already_delivered', batch, notification: batch.terminalNotification };
+    }
+    const updated = db.run(
+      `UPDATE gallery_upload_batches
+          SET terminal_notification_status = 'dispatching',
+              terminal_notification_attempt_id = ?, terminal_notification_started_at = ?,
+              terminal_notification_delivered_at = NULL, updated_at = ?, version = version + 1
+        WHERE id = ? AND scope_id = ? AND version = ?
+          AND terminal_notification_status IN ('pending', 'dispatching')`,
+      input.attemptId,
+      input.startedAt,
+      input.startedAt,
+      input.batchId,
+      input.scopeId,
+      batch.version
+    );
+    if (updated.changes !== 1) {
+      throw new GalleryStorageConflictError(`Gallery batch ${input.batchId} notification changed while dispatching.`);
+    }
+    const stored = requireBatch(db, input.scopeId, input.batchId);
+    return {
+      kind: 'dispatching',
+      batch: stored,
+      notification: stored.terminalNotification!
+    };
+  });
+}
+
+export type CompleteBatchTerminalNotificationResult =
+  | { kind: 'delivered'; batch: StoredGalleryUploadBatch; notification: GalleryBatchTerminalNotification }
+  | { kind: 'already_delivered'; batch: StoredGalleryUploadBatch; notification: GalleryBatchTerminalNotification }
+  | { kind: 'missing' }
+  | { kind: 'no_notification'; batch: StoredGalleryUploadBatch }
+  | { kind: 'attempt_lost'; batch: StoredGalleryUploadBatch; notification: GalleryBatchTerminalNotification };
+
+export function completeBatchTerminalNotification(db: PluginDatabase, input: {
+  scopeId: string;
+  batchId: string;
+  attemptId: string;
+  deliveredAt: string;
+}): CompleteBatchTerminalNotificationResult {
+  return db.transaction(() => {
+    const batch = getBatch(db, input.scopeId, input.batchId);
+    if (!batch) return { kind: 'missing' };
+    if (!batch.terminalNotification) return { kind: 'no_notification', batch };
+    if (batch.terminalNotification.status === 'delivered') {
+      return { kind: 'already_delivered', batch, notification: batch.terminalNotification };
+    }
+    if (
+      batch.terminalNotification.status !== 'dispatching' ||
+      batch.terminalNotification.attemptId !== input.attemptId
+    ) {
+      return { kind: 'attempt_lost', batch, notification: batch.terminalNotification };
+    }
+    const updated = db.run(
+      `UPDATE gallery_upload_batches
+          SET terminal_notification_status = 'delivered', terminal_notification_delivered_at = ?,
+              updated_at = ?, version = version + 1
+        WHERE id = ? AND scope_id = ? AND version = ?
+          AND terminal_notification_status = 'dispatching'
+          AND terminal_notification_attempt_id = ?`,
+      input.deliveredAt,
+      input.deliveredAt,
+      input.batchId,
+      input.scopeId,
+      batch.version,
+      input.attemptId
+    );
+    if (updated.changes !== 1) {
+      return {
+        kind: 'attempt_lost',
+        batch: requireBatch(db, input.scopeId, input.batchId),
+        notification: batch.terminalNotification
+      };
+    }
+    const stored = requireBatch(db, input.scopeId, input.batchId);
+    return { kind: 'delivered', batch: stored, notification: stored.terminalNotification! };
   });
 }
 
@@ -715,6 +1134,10 @@ export function completeBatchFinalization(db: PluginDatabase, input: {
   completedAt: string;
   albumLabel?: string | undefined;
   error?: string | undefined;
+  notification?: {
+    text: string;
+    deliveryKey: string;
+  } | undefined;
 }): CompleteBatchResult {
   return db.transaction(() => {
     const batch = getBatch(db, input.scopeId, input.batchId);
@@ -723,23 +1146,38 @@ export function completeBatchFinalization(db: PluginDatabase, input: {
     if (batch.status !== 'finalizing' || batch.finalizationClaimId !== input.claimId) {
       return { kind: 'claim_lost', batch };
     }
-    if (input.status === 'completed' && batch.files.some((file) => file.status === 'staged')) {
+    if (input.status === 'completed' && batch.files.some((file) => file.status !== 'uploaded')) {
       return { kind: 'staged_files_remain', batch };
     }
     if (input.status === 'expired' && batch.files.length > 0) {
       throw new GalleryStorageInvariantError('Only an empty gallery upload batch may expire.');
+    }
+    if (input.status === 'failed') {
+      db.run(
+        `UPDATE gallery_upload_batch_files
+            SET cleanup_pending = 1, cleanup_completed_at = NULL
+          WHERE batch_id = ? AND cleanup_pending = 0
+            AND (status <> 'uploaded' OR cleanup_completed_at IS NULL)`,
+        input.batchId
+      );
     }
     db.run(
       `UPDATE gallery_upload_batches
           SET status = ?, updated_at = ?, deadline_generation = deadline_generation + 1,
               version = version + 1, finalization_claim_id = NULL,
               finalization_claimed_at = NULL, finalization_claim_expires_at = NULL,
-              album_label = COALESCE(?, album_label), error = ?
+              album_label = COALESCE(?, album_label), error = ?,
+              terminal_notification_text = ?, terminal_notification_status = ?,
+              terminal_notification_delivery_key = ?, terminal_notification_attempt_id = NULL,
+              terminal_notification_started_at = NULL, terminal_notification_delivered_at = NULL
         WHERE id = ? AND scope_id = ? AND status = 'finalizing' AND finalization_claim_id = ?`,
       input.status,
       input.completedAt,
       input.albumLabel ?? null,
       input.error ?? null,
+      input.notification?.text ?? null,
+      input.notification ? 'pending' : null,
+      input.notification?.deliveryKey ?? null,
       input.batchId,
       input.scopeId,
       input.claimId
@@ -768,6 +1206,12 @@ export function cancelBatch(db: PluginDatabase, input: {
     if (input.expectedVersion !== undefined && input.expectedVersion !== batch.version) {
       return { kind: 'version_conflict', batch };
     }
+    db.run(
+      `UPDATE gallery_upload_batch_files
+          SET cleanup_pending = 1, cleanup_completed_at = NULL
+        WHERE batch_id = ? AND cleanup_pending = 0`,
+      input.batchId
+    );
     db.run(
       `UPDATE gallery_upload_batches
           SET status = 'cancelled', updated_at = ?, deadline_generation = deadline_generation + 1,
@@ -891,16 +1335,30 @@ export function saveAlbumAnnouncement(
 ): StoredPiwigoAlbumAnnouncement {
   return db.transaction(() => {
     const existing = getAlbumAnnouncement(db, announcement.scopeId, announcement.id);
+    const announcementGroupWid = announcement.announcementGroupWid
+      ? normalizeAnnouncementGroupWid(announcement.announcementGroupWid)
+      : existing?.announcementGroupWid;
+    if (
+      existing?.announcementGroupWid &&
+      announcementGroupWid &&
+      normalizeWid(existing.announcementGroupWid) !== announcementGroupWid
+    ) {
+      throw new GalleryStorageInvariantError(
+        `Album announcement ${announcement.id} target cannot be changed after capture.`
+      );
+    }
     if (existing && expectedVersion !== undefined && existing.version !== expectedVersion) {
       throw new GalleryStorageConflictError(`Album announcement ${announcement.id} changed concurrently.`);
     }
     if (existing) {
       const updated = db.run(
         `UPDATE gallery_album_announcements
-            SET album_id = ?, album_name = ?, site_label = ?, user_display_name = ?,
+            SET announcement_group_wid = ?, album_id = ?, album_name = ?, site_label = ?, user_display_name = ?,
                 observed_at = ?, announce_at = ?, status = ?, error = ?, announced_at = ?,
-                claim_id = ?, claim_expires_at = ?, version = version + 1
+                claim_id = ?, claim_expires_at = ?, download_retry_count = ?,
+                download_next_retry_at = ?, download_last_error = ?, version = version + 1
           WHERE id = ? AND scope_id = ? AND version = ?`,
+        announcementGroupWid ?? null,
         announcement.albumId ?? null,
         announcement.albumName,
         announcement.siteLabel,
@@ -912,6 +1370,9 @@ export function saveAlbumAnnouncement(
         announcement.announcedAt ?? null,
         announcement.claimId ?? null,
         announcement.claimExpiresAt ?? null,
+        announcement.downloadRetryCount ?? existing.downloadRetryCount,
+        announcement.downloadNextRetryAt ?? existing.downloadNextRetryAt ?? null,
+        announcement.downloadLastError ?? existing.downloadLastError ?? null,
         announcement.id,
         announcement.scopeId,
         expectedVersion ?? existing.version
@@ -922,12 +1383,14 @@ export function saveAlbumAnnouncement(
     } else {
       db.run(
         `INSERT INTO gallery_album_announcements (
-          id, dedupe_key, scope_id, album_id, album_name, site_label, user_display_name,
-          observed_at, announce_at, status, error, announced_at, claim_id, claim_expires_at, version
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+          id, dedupe_key, scope_id, announcement_group_wid, album_id, album_name, site_label,
+          user_display_name, observed_at, announce_at, status, error, announced_at, claim_id,
+          claim_expires_at, download_retry_count, download_next_retry_at, download_last_error, version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
         announcement.id,
         announcement.dedupeKey,
         announcement.scopeId,
+        announcementGroupWid ?? null,
         announcement.albumId ?? null,
         announcement.albumName,
         announcement.siteLabel,
@@ -938,7 +1401,10 @@ export function saveAlbumAnnouncement(
         announcement.error ?? null,
         announcement.announcedAt ?? null,
         announcement.claimId ?? null,
-        announcement.claimExpiresAt ?? null
+        announcement.claimExpiresAt ?? null,
+        announcement.downloadRetryCount ?? 0,
+        announcement.downloadNextRetryAt ?? null,
+        announcement.downloadLastError ?? null
       );
     }
     db.run('DELETE FROM gallery_album_announcement_files WHERE announcement_id = ?', announcement.id);
@@ -973,6 +1439,45 @@ export function getAlbumAnnouncementByDedupeKey(
   return row ? announcementFromRow(db, row) : undefined;
 }
 
+/**
+ * Backfills the immutable target for rows created before target persistence was
+ * introduced. New callback rows are inserted with this value already present.
+ */
+export function bindAlbumAnnouncementTarget(db: PluginDatabase, input: {
+  scopeId: string;
+  announcementId: string;
+  announcementGroupWid: string;
+}): StoredPiwigoAlbumAnnouncement | undefined {
+  const announcementGroupWid = normalizeAnnouncementGroupWid(input.announcementGroupWid);
+  return db.transaction(() => {
+    const announcement = getAlbumAnnouncement(db, input.scopeId, input.announcementId);
+    if (!announcement) return undefined;
+    if (announcement.announcementGroupWid) {
+      if (normalizeWid(announcement.announcementGroupWid) !== announcementGroupWid) {
+        throw new GalleryStorageInvariantError(
+          `Album announcement ${input.announcementId} target cannot be changed after capture.`
+        );
+      }
+      return announcement;
+    }
+    const updated = db.run(
+      `UPDATE gallery_album_announcements
+          SET announcement_group_wid = ?, version = version + 1
+        WHERE id = ? AND scope_id = ? AND announcement_group_wid IS NULL AND version = ?`,
+      announcementGroupWid,
+      input.announcementId,
+      input.scopeId,
+      announcement.version
+    );
+    if (updated.changes !== 1) {
+      throw new GalleryStorageConflictError(
+        `Album announcement ${input.announcementId} changed while binding its target.`
+      );
+    }
+    return requireAnnouncement(db, input.scopeId, input.announcementId);
+  });
+}
+
 export type ClaimAlbumAnnouncementResult =
   | { kind: 'claimed'; announcement: StoredPiwigoAlbumAnnouncement }
   | { kind: 'missing' }
@@ -992,6 +1497,9 @@ export function claimAlbumAnnouncement(db: PluginDatabase, input: {
     if (!announcement) return { kind: 'missing' };
     if (announcement.status !== 'pending') return { kind: 'not_pending', announcement };
     if (announcement.announceAt > input.claimedAt) return { kind: 'not_due', announcement };
+    if (announcement.downloadNextRetryAt && announcement.downloadNextRetryAt > input.claimedAt) {
+      return { kind: 'not_due', announcement };
+    }
     if (
       announcement.claimId &&
       announcement.claimId !== input.claimId &&
@@ -1017,6 +1525,257 @@ export function claimAlbumAnnouncement(db: PluginDatabase, input: {
   });
 }
 
+export type RenewAlbumAnnouncementClaimResult =
+  | { kind: 'renewed'; announcement: StoredPiwigoAlbumAnnouncement }
+  | { kind: 'missing' }
+  | { kind: 'claim_lost'; announcement: StoredPiwigoAlbumAnnouncement };
+
+export function renewAlbumAnnouncementClaim(db: PluginDatabase, input: {
+  scopeId: string;
+  announcementId: string;
+  claimId: string;
+  claimExpiresAt: string;
+}): RenewAlbumAnnouncementClaimResult {
+  return db.transaction(() => {
+    const announcement = getAlbumAnnouncement(db, input.scopeId, input.announcementId);
+    if (!announcement) return { kind: 'missing' };
+    if (announcement.status !== 'pending' || announcement.claimId !== input.claimId) {
+      return { kind: 'claim_lost', announcement };
+    }
+    const updated = db.run(
+      `UPDATE gallery_album_announcements
+          SET claim_expires_at = ?, version = version + 1
+        WHERE id = ? AND scope_id = ? AND status = 'pending'
+          AND claim_id = ? AND version = ?`,
+      input.claimExpiresAt,
+      input.announcementId,
+      input.scopeId,
+      input.claimId,
+      announcement.version
+    );
+    if (updated.changes !== 1) {
+      return {
+        kind: 'claim_lost',
+        announcement: requireAnnouncement(db, input.scopeId, input.announcementId)
+      };
+    }
+    return {
+      kind: 'renewed',
+      announcement: requireAnnouncement(db, input.scopeId, input.announcementId)
+    };
+  });
+}
+
+export type BeginAlbumAnnouncementFileDeliveryResult =
+  | { kind: 'dispatching'; announcement: StoredPiwigoAlbumAnnouncement; file: PiwigoAlbumAnnouncementFile }
+  | { kind: 'resumed'; announcement: StoredPiwigoAlbumAnnouncement; file: PiwigoAlbumAnnouncementFile }
+  | { kind: 'already_dispatching'; announcement: StoredPiwigoAlbumAnnouncement; file: PiwigoAlbumAnnouncementFile }
+  | { kind: 'already_delivered'; announcement: StoredPiwigoAlbumAnnouncement; file: PiwigoAlbumAnnouncementFile }
+  | { kind: 'missing' }
+  | { kind: 'claim_lost'; announcement: StoredPiwigoAlbumAnnouncement }
+  | { kind: 'file_missing'; announcement: StoredPiwigoAlbumAnnouncement };
+
+export function beginAlbumAnnouncementFileDelivery(db: PluginDatabase, input: {
+  scopeId: string;
+  announcementId: string;
+  claimId: string;
+  position: number;
+  startedAt: string;
+}): BeginAlbumAnnouncementFileDeliveryResult {
+  return db.transaction(() => {
+    const announcement = getAlbumAnnouncement(db, input.scopeId, input.announcementId);
+    if (!announcement) return { kind: 'missing' };
+    if (announcement.status !== 'pending' || announcement.claimId !== input.claimId) {
+      return { kind: 'claim_lost', announcement };
+    }
+    const file = announcement.files.find((candidate) => candidate.position === input.position);
+    if (!file) return { kind: 'file_missing', announcement };
+    if (file.deliveryStatus === 'delivered') {
+      return { kind: 'already_delivered', announcement, file };
+    }
+    if (file.deliveryStatus === 'dispatching' && file.deliveryClaimId === input.claimId) {
+      return { kind: 'already_dispatching', announcement, file };
+    }
+    const resuming = file.deliveryStatus === 'dispatching';
+    const updatedFile = db.run(
+      `UPDATE gallery_album_announcement_files
+          SET delivery_status = 'dispatching', delivery_claim_id = ?,
+              delivery_started_at = COALESCE(delivery_started_at, ?)
+        WHERE announcement_id = ? AND position = ? AND delivery_status = ?`,
+      input.claimId,
+      input.startedAt,
+      input.announcementId,
+      input.position,
+      resuming ? 'dispatching' : 'pending'
+    );
+    const updatedAnnouncement = db.run(
+      `UPDATE gallery_album_announcements
+          SET version = version + 1
+        WHERE id = ? AND scope_id = ? AND status = 'pending'
+          AND claim_id = ? AND version = ?`,
+      input.announcementId,
+      input.scopeId,
+      input.claimId,
+      announcement.version
+    );
+    if (updatedFile.changes !== 1 || updatedAnnouncement.changes !== 1) {
+      throw new GalleryStorageConflictError(
+        `Album announcement ${input.announcementId} file ${input.position} changed while dispatching.`
+      );
+    }
+    const stored = requireAnnouncement(db, input.scopeId, input.announcementId);
+    return {
+      kind: resuming ? 'resumed' : 'dispatching',
+      announcement: stored,
+      file: stored.files.find((candidate) => candidate.position === input.position)!
+    };
+  });
+}
+
+export type CompleteAlbumAnnouncementFileDeliveryResult =
+  | { kind: 'delivered'; announcement: StoredPiwigoAlbumAnnouncement; file: PiwigoAlbumAnnouncementFile }
+  | { kind: 'already_delivered'; announcement: StoredPiwigoAlbumAnnouncement; file: PiwigoAlbumAnnouncementFile }
+  | { kind: 'missing' }
+  | { kind: 'claim_lost'; announcement: StoredPiwigoAlbumAnnouncement }
+  | { kind: 'file_missing'; announcement: StoredPiwigoAlbumAnnouncement }
+  | { kind: 'not_dispatching'; announcement: StoredPiwigoAlbumAnnouncement; file: PiwigoAlbumAnnouncementFile };
+
+export function completeAlbumAnnouncementFileDelivery(db: PluginDatabase, input: {
+  scopeId: string;
+  announcementId: string;
+  claimId: string;
+  position: number;
+  deliveredAt: string;
+}): CompleteAlbumAnnouncementFileDeliveryResult {
+  return db.transaction(() => {
+    const announcement = getAlbumAnnouncement(db, input.scopeId, input.announcementId);
+    if (!announcement) return { kind: 'missing' };
+    if (announcement.status !== 'pending' || announcement.claimId !== input.claimId) {
+      return { kind: 'claim_lost', announcement };
+    }
+    const file = announcement.files.find((candidate) => candidate.position === input.position);
+    if (!file) return { kind: 'file_missing', announcement };
+    if (file.deliveryStatus === 'delivered') {
+      return { kind: 'already_delivered', announcement, file };
+    }
+    if (file.deliveryStatus !== 'dispatching' || file.deliveryClaimId !== input.claimId) {
+      return { kind: 'not_dispatching', announcement, file };
+    }
+    const updatedFile = db.run(
+      `UPDATE gallery_album_announcement_files
+          SET delivery_status = 'delivered', delivered_at = ?
+        WHERE announcement_id = ? AND position = ? AND delivery_status = 'dispatching'
+          AND delivery_claim_id = ?`,
+      input.deliveredAt,
+      input.announcementId,
+      input.position,
+      input.claimId
+    );
+    const updatedAnnouncement = db.run(
+      `UPDATE gallery_album_announcements
+          SET download_retry_count = 0, download_next_retry_at = NULL,
+              download_last_error = NULL, version = version + 1
+        WHERE id = ? AND scope_id = ? AND status = 'pending'
+          AND claim_id = ? AND version = ?`,
+      input.announcementId,
+      input.scopeId,
+      input.claimId,
+      announcement.version
+    );
+    if (updatedFile.changes !== 1 || updatedAnnouncement.changes !== 1) {
+      throw new GalleryStorageConflictError(
+        `Album announcement ${input.announcementId} file ${input.position} changed while acknowledging delivery.`
+      );
+    }
+    const stored = requireAnnouncement(db, input.scopeId, input.announcementId);
+    return {
+      kind: 'delivered',
+      announcement: stored,
+      file: stored.files.find((candidate) => candidate.position === input.position)!
+    };
+  });
+}
+
+export type RecordAlbumAnnouncementDownloadFailureResult =
+  | { kind: 'retry_scheduled'; announcement: StoredPiwigoAlbumAnnouncement }
+  | { kind: 'exhausted'; announcement: StoredPiwigoAlbumAnnouncement }
+  | { kind: 'missing' }
+  | { kind: 'claim_lost'; announcement: StoredPiwigoAlbumAnnouncement }
+  | { kind: 'file_missing'; announcement: StoredPiwigoAlbumAnnouncement }
+  | { kind: 'not_dispatching'; announcement: StoredPiwigoAlbumAnnouncement };
+
+/**
+ * Records a read-only Piwigo download failure and releases the claim only when
+ * another bounded attempt is allowed. No WhatsApp media action has been
+ * emitted at this point, so the file delivery marker can safely return to
+ * pending.
+ */
+export function recordAlbumAnnouncementDownloadFailure(db: PluginDatabase, input: {
+  scopeId: string;
+  announcementId: string;
+  claimId: string;
+  position: number;
+  failedAt: string;
+  error: string;
+  retryAt: string;
+  maxAttempts: number;
+}): RecordAlbumAnnouncementDownloadFailureResult {
+  if (!Number.isSafeInteger(input.maxAttempts) || input.maxAttempts < 1) {
+    throw new GalleryStorageInvariantError('Album announcement download maxAttempts must be positive.');
+  }
+  return db.transaction(() => {
+    const announcement = getAlbumAnnouncement(db, input.scopeId, input.announcementId);
+    if (!announcement) return { kind: 'missing' };
+    if (announcement.status !== 'pending' || announcement.claimId !== input.claimId) {
+      return { kind: 'claim_lost', announcement };
+    }
+    const file = announcement.files.find((candidate) => candidate.position === input.position);
+    if (!file) return { kind: 'file_missing', announcement };
+    if (file.deliveryStatus !== 'dispatching' || file.deliveryClaimId !== input.claimId) {
+      return { kind: 'not_dispatching', announcement };
+    }
+
+    const retryCount = announcement.downloadRetryCount + 1;
+    const exhausted = retryCount >= input.maxAttempts;
+    const updatedFile = db.run(
+      `UPDATE gallery_album_announcement_files
+          SET delivery_status = 'pending', delivery_claim_id = NULL,
+              delivery_started_at = NULL
+        WHERE announcement_id = ? AND position = ? AND delivery_status = 'dispatching'
+          AND delivery_claim_id = ?`,
+      input.announcementId,
+      input.position,
+      input.claimId
+    );
+    const updatedAnnouncement = db.run(
+      `UPDATE gallery_album_announcements
+          SET status = ?, error = ?, claim_id = NULL, claim_expires_at = NULL,
+              download_retry_count = ?, download_next_retry_at = ?,
+              download_last_error = ?, version = version + 1
+        WHERE id = ? AND scope_id = ? AND status = 'pending'
+          AND claim_id = ? AND version = ?`,
+      exhausted ? 'failed' : 'pending',
+      exhausted ? input.error : null,
+      retryCount,
+      exhausted ? null : input.retryAt,
+      input.error,
+      input.announcementId,
+      input.scopeId,
+      input.claimId,
+      announcement.version
+    );
+    if (updatedFile.changes !== 1 || updatedAnnouncement.changes !== 1) {
+      throw new GalleryStorageConflictError(
+        `Album announcement ${input.announcementId} changed while recording a download failure.`
+      );
+    }
+    return {
+      kind: exhausted ? 'exhausted' : 'retry_scheduled',
+      announcement: requireAnnouncement(db, input.scopeId, input.announcementId)
+    };
+  });
+}
+
 export function completeAlbumAnnouncement(db: PluginDatabase, input: {
   scopeId: string;
   announcementId: string;
@@ -1029,7 +1788,8 @@ export function completeAlbumAnnouncement(db: PluginDatabase, input: {
     const updated = db.run(
       `UPDATE gallery_album_announcements
           SET status = ?, error = ?, announced_at = ?, claim_id = NULL,
-              claim_expires_at = NULL, version = version + 1
+              claim_expires_at = NULL, download_next_retry_at = NULL,
+              version = version + 1
         WHERE id = ? AND scope_id = ? AND status = 'pending' AND claim_id = ?`,
       input.status,
       input.error ?? null,
@@ -1044,18 +1804,12 @@ export function completeAlbumAnnouncement(db: PluginDatabase, input: {
   });
 }
 
-export function saveRegistrationOtp(db: PluginDatabase, request: GalleryRegistrationOtpRequest): void {
-  db.run(
+export function saveRegistrationOtp(db: PluginDatabase, request: GalleryRegistrationOtpRequest): boolean {
+  return db.run(
     `INSERT INTO gallery_registration_otps (
       request_id, wid, display_name, otp_hash, expires_at, attempts, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(request_id) DO UPDATE SET
-      wid = excluded.wid,
-      display_name = excluded.display_name,
-      otp_hash = excluded.otp_hash,
-      expires_at = excluded.expires_at,
-      attempts = excluded.attempts,
-      created_at = excluded.created_at`,
+    ON CONFLICT(request_id) DO NOTHING`,
     request.requestId,
     normalizeWid(request.wid),
     request.displayName ?? null,
@@ -1063,7 +1817,7 @@ export function saveRegistrationOtp(db: PluginDatabase, request: GalleryRegistra
     request.expiresAt,
     request.attempts,
     request.createdAt
-  );
+  ).changes === 1;
 }
 
 export function getRegistrationOtp(
@@ -1077,11 +1831,23 @@ export function getRegistrationOtp(
   return row ? registrationOtpFromRow(row) : undefined;
 }
 
+export function deleteRegistrationOtp(db: PluginDatabase, requestId: string): number {
+  return db.run('DELETE FROM gallery_registration_otps WHERE request_id = ?', requestId).changes;
+}
+
 export type ConsumeRegistrationOtpResult =
   | { kind: 'verified'; request: GalleryRegistrationOtpRequest }
   | { kind: 'invalid'; attempts: number; locked: boolean }
+  | { kind: 'consumed' }
+  | { kind: 'locked' }
   | { kind: 'expired' }
   | { kind: 'missing' };
+
+const REGISTRATION_OTP_TERMINAL_HASHES = {
+  consumed: '!piwigo-registration-otp:consumed',
+  locked: '!piwigo-registration-otp:locked',
+  expired: '!piwigo-registration-otp:expired'
+} as const;
 
 export function consumeRegistrationOtp(db: PluginDatabase, input: {
   requestId: string;
@@ -1092,18 +1858,34 @@ export function consumeRegistrationOtp(db: PluginDatabase, input: {
   return db.transaction(() => {
     const request = getRegistrationOtp(db, input.requestId);
     if (!request) return { kind: 'missing' };
+    if (request.status === 'consumed') return { kind: 'consumed' };
+    if (request.status === 'locked') return { kind: 'locked' };
+    if (request.status === 'expired') return { kind: 'expired' };
     if (request.expiresAt <= input.now) {
-      db.run('DELETE FROM gallery_registration_otps WHERE request_id = ?', input.requestId);
+      db.run(
+        'UPDATE gallery_registration_otps SET otp_hash = ? WHERE request_id = ?',
+        REGISTRATION_OTP_TERMINAL_HASHES.expired,
+        input.requestId
+      );
       return { kind: 'expired' };
     }
     if (safeHashEqual(request.otpHash, input.candidateHash)) {
-      db.run('DELETE FROM gallery_registration_otps WHERE request_id = ?', input.requestId);
+      db.run(
+        'UPDATE gallery_registration_otps SET otp_hash = ? WHERE request_id = ?',
+        REGISTRATION_OTP_TERMINAL_HASHES.consumed,
+        input.requestId
+      );
       return { kind: 'verified', request };
     }
     const attempts = request.attempts + 1;
     const locked = attempts >= input.maxAttempts;
     if (locked) {
-      db.run('DELETE FROM gallery_registration_otps WHERE request_id = ?', input.requestId);
+      db.run(
+        'UPDATE gallery_registration_otps SET attempts = ?, otp_hash = ? WHERE request_id = ?',
+        attempts,
+        REGISTRATION_OTP_TERMINAL_HASHES.locked,
+        input.requestId
+      );
     } else {
       db.run(
         'UPDATE gallery_registration_otps SET attempts = ? WHERE request_id = ?',
@@ -1116,7 +1898,17 @@ export function consumeRegistrationOtp(db: PluginDatabase, input: {
 }
 
 export function pruneExpiredRegistrationOtps(db: PluginDatabase, now: string): number {
-  return db.run('DELETE FROM gallery_registration_otps WHERE expires_at <= ?', now).changes;
+  return db.run(
+    `UPDATE gallery_registration_otps
+        SET otp_hash = ?
+      WHERE expires_at <= ?
+        AND otp_hash NOT IN (?, ?, ?)`,
+    REGISTRATION_OTP_TERMINAL_HASHES.expired,
+    now,
+    REGISTRATION_OTP_TERMINAL_HASHES.consumed,
+    REGISTRATION_OTP_TERMINAL_HASHES.locked,
+    REGISTRATION_OTP_TERMINAL_HASHES.expired
+  ).changes;
 }
 
 export interface LegacyPluginDataRecord {
@@ -1241,8 +2033,10 @@ function insertBatchFile(db: PluginDatabase, batchId: string, file: GalleryBatch
   db.run(
     `INSERT INTO gallery_upload_batch_files (
       batch_id, media_id, message_id, filename, mime_type, size_bytes, status,
-      image_id, url, accepted_at, uploaded_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      image_id, url, accepted_at, upload_attempt_id, upload_started_at, uploaded_at,
+      upload_retry_count, upload_next_retry_at, upload_last_error,
+      cleanup_pending, cleanup_completed_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     batchId,
     file.mediaId,
     file.messageId,
@@ -1253,7 +2047,14 @@ function insertBatchFile(db: PluginDatabase, batchId: string, file: GalleryBatch
     file.imageId ?? null,
     file.url ?? null,
     acceptedAt,
-    file.uploadedAt ?? null
+    file.uploadAttemptId ?? (file.status === 'uploaded' ? `legacy:${batchId}:${file.messageId}` : null),
+    file.uploadStartedAt ?? (file.status === 'uploaded' ? file.uploadedAt ?? acceptedAt : null),
+    file.uploadedAt ?? (file.status === 'uploaded' ? acceptedAt : null),
+    file.uploadRetryCount ?? 0,
+    file.uploadNextRetryAt ?? null,
+    file.uploadLastError ?? null,
+    file.cleanupPending ? 1 : 0,
+    file.cleanupCompletedAt ?? null
   );
 }
 
@@ -1314,7 +2115,25 @@ function batchFromRow(db: PluginDatabase, row: BatchRow): StoredGalleryUploadBat
     ...(row.finalization_claimed_at ? { finalizationClaimedAt: row.finalization_claimed_at } : {}),
     ...(row.finalization_claim_expires_at ? { finalizationClaimExpiresAt: row.finalization_claim_expires_at } : {}),
     ...(row.album_label ? { albumLabel: row.album_label } : {}),
-    ...(row.error ? { error: row.error } : {})
+    ...(row.error ? { error: row.error } : {}),
+    ...(row.terminal_notification_text && row.terminal_notification_status && row.terminal_notification_delivery_key
+      ? {
+          terminalNotification: {
+            text: row.terminal_notification_text,
+            status: row.terminal_notification_status,
+            deliveryKey: row.terminal_notification_delivery_key,
+            ...(row.terminal_notification_attempt_id
+              ? { attemptId: row.terminal_notification_attempt_id }
+              : {}),
+            ...(row.terminal_notification_started_at
+              ? { startedAt: row.terminal_notification_started_at }
+              : {}),
+            ...(row.terminal_notification_delivered_at
+              ? { deliveredAt: row.terminal_notification_delivered_at }
+              : {})
+          }
+        }
+      : {})
   };
 }
 
@@ -1327,9 +2146,16 @@ function batchFileFromRow(row: BatchFileRow): GalleryBatchFile {
     sizeBytes: row.size_bytes,
     status: row.status,
     acceptedAt: row.accepted_at,
+    ...(row.upload_attempt_id ? { uploadAttemptId: row.upload_attempt_id } : {}),
+    ...(row.upload_started_at ? { uploadStartedAt: row.upload_started_at } : {}),
+    ...(row.upload_retry_count > 0 ? { uploadRetryCount: row.upload_retry_count } : {}),
+    ...(row.upload_next_retry_at ? { uploadNextRetryAt: row.upload_next_retry_at } : {}),
+    ...(row.upload_last_error ? { uploadLastError: row.upload_last_error } : {}),
     ...(row.image_id !== null ? { imageId: row.image_id } : {}),
     ...(row.url ? { url: row.url } : {}),
-    ...(row.uploaded_at ? { uploadedAt: row.uploaded_at } : {})
+    ...(row.uploaded_at ? { uploadedAt: row.uploaded_at } : {}),
+    ...(row.cleanup_pending === 1 ? { cleanupPending: true } : {}),
+    ...(row.cleanup_completed_at ? { cleanupCompletedAt: row.cleanup_completed_at } : {})
   };
 }
 
@@ -1359,21 +2185,28 @@ function linkRequestFromRow(db: PluginDatabase, row: LinkRequestRow): GalleryLin
 
 function announcementFromRow(db: PluginDatabase, row: AnnouncementRow): StoredPiwigoAlbumAnnouncement {
   const files = db.all<AnnouncementFileRow>(
-    `SELECT image_id, file_id, download_token, filename, mime_type
+    `SELECT position, image_id, file_id, download_token, filename, mime_type,
+            delivery_status, delivery_claim_id, delivery_started_at, delivered_at
        FROM gallery_album_announcement_files
       WHERE announcement_id = ? ORDER BY position`,
     row.id
   ).map((file) => ({
+    position: file.position,
     ...(file.image_id !== null ? { imageId: file.image_id } : {}),
     ...(file.file_id ? { fileId: file.file_id } : {}),
     ...(file.download_token ? { downloadToken: file.download_token } : {}),
     filename: file.filename,
-    mimeType: file.mime_type
+    mimeType: file.mime_type,
+    deliveryStatus: file.delivery_status,
+    ...(file.delivery_claim_id ? { deliveryClaimId: file.delivery_claim_id } : {}),
+    ...(file.delivery_started_at ? { deliveryStartedAt: file.delivery_started_at } : {}),
+    ...(file.delivered_at ? { deliveredAt: file.delivered_at } : {})
   }));
   return {
     id: row.id,
     dedupeKey: row.dedupe_key,
     scopeId: row.scope_id,
+    ...(row.announcement_group_wid ? { announcementGroupWid: row.announcement_group_wid } : {}),
     ...(row.album_id ? { albumId: row.album_id } : {}),
     albumName: row.album_name,
     siteLabel: row.site_label,
@@ -1386,16 +2219,27 @@ function announcementFromRow(db: PluginDatabase, row: AnnouncementRow): StoredPi
     ...(row.announced_at ? { announcedAt: row.announced_at } : {}),
     ...(row.claim_id ? { claimId: row.claim_id } : {}),
     ...(row.claim_expires_at ? { claimExpiresAt: row.claim_expires_at } : {}),
+    downloadRetryCount: row.download_retry_count,
+    ...(row.download_next_retry_at ? { downloadNextRetryAt: row.download_next_retry_at } : {}),
+    ...(row.download_last_error ? { downloadLastError: row.download_last_error } : {}),
     version: row.version
   };
 }
 
 function registrationOtpFromRow(row: RegistrationOtpRow): GalleryRegistrationOtpRequest {
+  const status = row.otp_hash === REGISTRATION_OTP_TERMINAL_HASHES.consumed
+    ? 'consumed'
+    : row.otp_hash === REGISTRATION_OTP_TERMINAL_HASHES.locked
+      ? 'locked'
+      : row.otp_hash === REGISTRATION_OTP_TERMINAL_HASHES.expired
+        ? 'expired'
+        : 'active';
   return {
     requestId: row.request_id,
     wid: row.wid,
     ...(row.display_name ? { displayName: row.display_name } : {}),
     otpHash: row.otp_hash,
+    status,
     expiresAt: row.expires_at,
     attempts: row.attempts,
     createdAt: row.created_at
@@ -1408,20 +2252,25 @@ function insertAnnouncementFile(
   file: PiwigoAlbumAnnouncementFile,
   position: number
 ): void {
-  if (file.imageId === undefined && !file.fileId && !file.downloadToken) {
-    throw new GalleryStorageInvariantError('Album announcement file requires a download reference.');
+  if (file.imageId === undefined || !Number.isInteger(file.imageId) || file.imageId <= 0) {
+    throw new GalleryStorageInvariantError('Album announcement file requires a positive immutable Piwigo image ID.');
   }
   db.run(
     `INSERT INTO gallery_album_announcement_files (
-      announcement_id, position, image_id, file_id, download_token, filename, mime_type
-    ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      announcement_id, position, image_id, file_id, download_token, filename, mime_type,
+      delivery_status, delivery_claim_id, delivery_started_at, delivered_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     announcementId,
     position,
-    file.imageId ?? null,
-    file.fileId ?? null,
-    file.downloadToken ?? null,
+    file.imageId,
+    null,
+    null,
     file.filename,
-    file.mimeType
+    file.mimeType,
+    file.deliveryStatus ?? 'pending',
+    file.deliveryClaimId ?? null,
+    file.deliveryStartedAt ?? null,
+    file.deliveredAt ?? null
   );
 }
 
@@ -1457,6 +2306,16 @@ function assertExactTarget(groupWid: string, chatId: string): void {
       `Gallery uploads require one exact physical group target; received group=${groupWid}, chat=${chatId}.`
     );
   }
+}
+
+function normalizeAnnouncementGroupWid(groupWid: string): string {
+  const normalized = normalizeWid(groupWid);
+  if (!normalized.endsWith('@g.us')) {
+    throw new GalleryStorageInvariantError(
+      `Album announcements require a physical WhatsApp group target; received ${groupWid}.`
+    );
+  }
+  return normalized;
 }
 
 function assertSameTarget(
@@ -1596,12 +2455,10 @@ const legacyAnnouncementSchema = z.object({
   siteLabel: z.string(),
   userDisplayName: z.string(),
   files: z.array(z.object({
-    imageId: z.number().int().optional(),
-    fileId: z.string().optional(),
-    downloadToken: z.string().optional(),
+    imageId: z.number().int().positive(),
     filename: z.string().min(1),
     mimeType: z.string().min(1)
-  })),
+  }).passthrough()),
   observedAt: z.string().min(1),
   announceAt: z.string().min(1),
   status: z.enum(['pending', 'announced', 'skipped', 'failed']),

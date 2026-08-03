@@ -1,6 +1,7 @@
 import type { BotPlugin } from '../../../platform/pluginRuntime/types';
 import { registerPiwigoGalleryCancellations, registerPiwigoGalleryCommands } from './commands';
 import { createPiwigoGalleryHooks } from './hooks';
+import { createPiwigoGalleryExternalActions } from './externalActions';
 import { piwigoGalleryManifest } from './manifest';
 
 export const piwigoGalleryPlugin: BotPlugin = {
@@ -13,6 +14,9 @@ export const piwigoGalleryPlugin: BotPlugin = {
   },
   registerHooks(context) {
     return createPiwigoGalleryHooks(context);
+  },
+  registerExternalActions(context) {
+    return createPiwigoGalleryExternalActions(context);
   }
 };
 

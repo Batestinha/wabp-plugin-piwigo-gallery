@@ -20,6 +20,10 @@ export interface PiwigoStatusResult {
   ok: boolean;
   plugin: string;
   version?: string | undefined;
+  upload_idempotency?: boolean | undefined;
+  capabilities?: {
+    upload_idempotency?: boolean | undefined;
+  } | undefined;
 }
 
 export interface PiwigoEligibleScope {
@@ -68,8 +72,17 @@ const acceptedTypesSchema = z.object({
 const statusSchema = z.object({
   ok: z.boolean(),
   plugin: z.string().trim().min(1),
-  version: z.string().trim().min(1).optional()
+  version: z.string().trim().min(1).optional(),
+  upload_idempotency: z.boolean().optional(),
+  capabilities: z.object({
+    upload_idempotency: z.boolean().optional()
+  }).passthrough().optional()
 }).passthrough();
+
+const uploadIdempotencyKeySchema = z.string()
+  .min(16)
+  .max(128)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$/);
 
 const peopleSchema = z.object({
   people: z.array(z.object({
@@ -120,11 +133,20 @@ export class PiwigoApiError extends Error {
     readonly method: string,
     readonly httpStatus?: number | undefined,
     readonly piwigoCode?: number | undefined,
-    options?: ErrorOptions | undefined
+    options?: (ErrorOptions & { ambiguousOutcome?: boolean | undefined }) | undefined
   ) {
     super(message, options);
     this.name = 'PiwigoApiError';
+    this.ambiguousOutcome = options?.ambiguousOutcome === true;
   }
+
+  readonly ambiguousOutcome: boolean;
+}
+
+export function supportsPiwigoUploadIdempotency(status: PiwigoStatusResult): boolean {
+  return status.ok === true && (
+    status.upload_idempotency === true || status.capabilities?.upload_idempotency === true
+  );
 }
 
 export class PiwigoGalleryClient {
@@ -186,6 +208,7 @@ export class PiwigoGalleryClient {
   }
 
   uploadForJid(input: {
+    idempotencyKey: string;
     whatsappJid: string;
     scopeId: string;
     onde: string;
@@ -195,8 +218,10 @@ export class PiwigoGalleryClient {
     mimeType: string;
     buffer: Buffer;
   }): Promise<PiwigoUploadResult> {
+    const idempotencyKey = uploadIdempotencyKeySchema.parse(input.idempotencyKey);
     const form = new FormData();
     form.set('bot_secret', this.connection.botSecret);
+    form.set('idempotency_key', idempotencyKey);
     form.set('whatsapp_jid', input.whatsappJid);
     form.set('scope_id', input.scopeId);
     form.set('onde', input.onde);
@@ -261,7 +286,7 @@ export class PiwigoGalleryClient {
         method,
         response.status,
         undefined,
-        { cause: error }
+        { cause: error, ambiguousOutcome: true }
       );
     }
     const failure = piwigoFailureSchema.safeParse(payload);
@@ -280,7 +305,7 @@ export class PiwigoGalleryClient {
         method,
         response.status,
         undefined,
-        { cause: envelope.error }
+        { cause: envelope.error, ambiguousOutcome: true }
       );
     }
     const result = resultSchema.safeParse(envelope.data.result);
@@ -290,7 +315,7 @@ export class PiwigoGalleryClient {
         method,
         response.status,
         undefined,
-        { cause: result.error }
+        { cause: result.error, ambiguousOutcome: true }
       );
     }
     return result.data;

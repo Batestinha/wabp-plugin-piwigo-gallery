@@ -1,51 +1,76 @@
-import { randomUUID } from 'node:crypto';
 import type { FlowDefinition } from '../../../adminBot/flows/flowTypes';
 import type { FlowSessionSnapshot } from '../../../adminBot/flows/flowEngine';
 import type { TranslateFn } from '../../../platform/i18n';
 import type { PiwigoPerson } from './piwigoClient';
 
+export const PIWIGO_GALLERY_UPLOAD_FLOW_TYPE = 'official.piwigo-gallery.upload.v1';
+
+interface GalleryFlowCopy {
+  where: string;
+  when: string;
+  with: string;
+  confirm: string;
+  yes: string;
+  no: string;
+}
+
+interface GalleryFlowStateData {
+  copy: GalleryFlowCopy;
+  people: PiwigoPerson[];
+}
+
 export function createGalleryUploadFlowDefinition(input: {
   t: TranslateFn;
-  people: PiwigoPerson[];
 }): FlowDefinition {
-  const flowType = `official.piwigo-gallery.upload.${randomUUID()}`;
   return {
-    flowType,
+    flowType: PIWIGO_GALLERY_UPLOAD_FLOW_TYPE,
     t: input.t,
     initialStepId: 'onde',
     context: 'private',
     timeoutMinutes: 30,
-    completionReply: input.t('official.piwigo-gallery.flow.complete'),
+    completionReply: false,
     steps: {
       onde: {
         id: 'onde',
         kind: 'text',
         prompt: input.t('official.piwigo-gallery.flow.where'),
+        promptForState: (state) => galleryFlowStateData(state.data)?.copy.where
+          ?? input.t('official.piwigo-gallery.flow.where'),
         nextStepId: 'quando'
       },
       quando: {
         id: 'quando',
         kind: 'text',
         prompt: input.t('official.piwigo-gallery.flow.when'),
+        promptForState: (state) => galleryFlowStateData(state.data)?.copy.when
+          ?? input.t('official.piwigo-gallery.flow.when'),
         nextStepId: 'com'
       },
       com: {
         id: 'com',
         kind: 'choice',
         prompt: input.t('official.piwigo-gallery.flow.with'),
-        options: input.people.map((person) => ({ label: person.label, value: person.id })),
+        promptForState: (state) => galleryFlowStateData(state.data)?.copy.with
+          ?? input.t('official.piwigo-gallery.flow.with'),
+        optionsForState: (state) => (galleryFlowStateData(state.data)?.people ?? [])
+          .map((person) => ({ label: person.label, value: person.id })),
         minSelections: 1,
-        maxSelections: input.people.length,
+        maxSelectionsForState: (state) => galleryFlowStateData(state.data)?.people.length,
         nextStepId: 'confirmar'
       },
       confirmar: {
         id: 'confirmar',
         kind: 'choice',
         prompt: input.t('official.piwigo-gallery.flow.confirm'),
-        options: [
-          { label: input.t('official.piwigo-gallery.flow.yes'), value: 'yes' },
-          { label: input.t('official.piwigo-gallery.flow.no'), value: 'no' }
-        ],
+        promptForState: (state) => galleryFlowStateData(state.data)?.copy.confirm
+          ?? input.t('official.piwigo-gallery.flow.confirm'),
+        optionsForState: (state) => {
+          const copy = galleryFlowStateData(state.data)?.copy;
+          return [
+            { label: copy?.yes ?? input.t('official.piwigo-gallery.flow.yes'), value: 'yes' },
+            { label: copy?.no ?? input.t('official.piwigo-gallery.flow.no'), value: 'no' }
+          ];
+        },
         minSelections: 1,
         maxSelections: 1
       }
@@ -53,8 +78,35 @@ export function createGalleryUploadFlowDefinition(input: {
   };
 }
 
-export function galleryConfirmPurpose(flowType: string): string {
-  return `flow.${flowType}.confirmar`;
+export function galleryUploadFlowInitialData(input: {
+  t: TranslateFn;
+  people: PiwigoPerson[];
+}): Record<string, unknown> {
+  return {
+    gallery: {
+      copy: {
+        where: input.t('official.piwigo-gallery.flow.where'),
+        when: input.t('official.piwigo-gallery.flow.when'),
+        with: input.t('official.piwigo-gallery.flow.with'),
+        confirm: input.t('official.piwigo-gallery.flow.confirm'),
+        yes: input.t('official.piwigo-gallery.flow.yes'),
+        no: input.t('official.piwigo-gallery.flow.no')
+      },
+      people: input.people.map((person) => ({ id: person.id, label: person.label }))
+    } satisfies GalleryFlowStateData
+  };
+}
+
+export function galleryConfirmPurpose(): string {
+  return `flow.${PIWIGO_GALLERY_UPLOAD_FLOW_TYPE}.confirmar`;
+}
+
+export function galleryUploadBatchId(flowSessionId: string): string {
+  const normalized = flowSessionId.trim();
+  if (!normalized) {
+    throw new Error('A gallery upload flow session ID is required.');
+  }
+  return `gallery-flow-${normalized}`;
 }
 
 export function galleryFlowConfirmed(snapshot: FlowSessionSnapshot): boolean {
@@ -75,4 +127,35 @@ export function galleryFlowAnswers(snapshot: FlowSessionSnapshot): {
     return undefined;
   }
   return { onde, quando, withUserIds };
+}
+
+function galleryFlowStateData(data: Record<string, unknown>): GalleryFlowStateData | undefined {
+  if (typeof data.gallery !== 'object' || data.gallery === null) {
+    return undefined;
+  }
+  const gallery = data.gallery as Record<string, unknown>;
+  if (typeof gallery.copy !== 'object' || gallery.copy === null || !Array.isArray(gallery.people)) {
+    return undefined;
+  }
+  const copy = gallery.copy as Record<string, unknown>;
+  const requiredCopy = ['where', 'when', 'with', 'confirm', 'yes', 'no'] as const;
+  if (!requiredCopy.every((key) => typeof copy[key] === 'string')) {
+    return undefined;
+  }
+  const people = gallery.people.flatMap((person) => {
+    if (typeof person !== 'object' || person === null) {
+      return [];
+    }
+    const candidate = person as Record<string, unknown>;
+    return Number.isSafeInteger(candidate.id) && Number(candidate.id) > 0 && typeof candidate.label === 'string'
+      ? [{ id: Number(candidate.id), label: candidate.label }]
+      : [];
+  });
+  if (people.length === 0) {
+    return undefined;
+  }
+  return {
+    copy: copy as unknown as GalleryFlowCopy,
+    people
+  };
 }

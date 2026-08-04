@@ -7,7 +7,7 @@ import type { PluginRuntimeContext } from '../../../platform/pluginRuntime/runti
 import type { PluginAction } from '../../../platform/pluginRuntime/runtime/pluginActionTypes';
 import { randomUUID } from 'node:crypto';
 import { enqueuePluginJob } from '../../../platform/jobs/queue';
-import { parsePiwigoGalleryConfig } from './config';
+import { parsePiwigoGalleryConfig, renderPiwigoAlbumAnnouncementTemplate } from './config';
 import {
   PIWIGO_GALLERY_ANNOUNCE_NEW_ALBUM_JOB,
   PIWIGO_GALLERY_FINALIZE_JOB,
@@ -1336,10 +1336,17 @@ async function dispatchNextAnnouncementFile(
     const file = await withAlbumAnnouncementLeaseHeartbeat(db, announcement, claimId, () =>
       client.downloadForBot({ imageId })
     );
-    const caption = context.i18n.translator(context.i18n.getDefaultLocale())(
-      'official.piwigo-gallery.albumAnnouncementCaption',
-      { album: announcement.albumName, site: announcement.siteLabel, user: announcement.userDisplayName }
-    );
+    const captionValues = {
+      album: announcement.albumName,
+      site: announcement.siteLabel,
+      user: announcement.userDisplayName
+    };
+    const caption = config.newAlbumAnnouncementTemplate
+      ? renderPiwigoAlbumAnnouncementTemplate(config.newAlbumAnnouncementTemplate, captionValues)
+      : (await context.i18n.translatorForScope(announcement.scopeId))(
+          'official.piwigo-gallery.albumAnnouncementCaption',
+          captionValues
+        );
     return [
       announcementClaimRecoveryAction(announcement),
       {

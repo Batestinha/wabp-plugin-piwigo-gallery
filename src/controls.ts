@@ -132,8 +132,27 @@ export const piwigoGalleryControls: ControlDescriptor[] = [
     path: 'newAlbumAnnouncementDelayMinutes',
     label: 'Announcement delay minutes',
     description: 'Minutes after Piwigo reports a new album upload before the WhatsApp album announcement is sent.',
-    order: 90,
+    order: 100,
     schema: { type: 'number', unit: 'minutes', min: 1, max: 1440 },
     ui: { widget: 'number' }
+  }),
+  control({
+    path: 'newAlbumAnnouncementTemplate',
+    label: 'Announcement text',
+    description: 'Optional WhatsApp caption template for a new album announcement.',
+    order: 90,
+    schema: { type: 'string', max: 500 },
+    ui: {
+      widget: 'text',
+      label: 'Announcement template',
+      placeholder: piwigoGalleryMessages['official.piwigo-gallery.albumAnnouncementCaption'],
+      helpText: 'Use {album}, {site}, and {user}. Leave empty to use the localized message for the scope.',
+      multiline: true,
+      templateVariables: [
+        { token: 'album', label: 'Album name' },
+        { token: 'site', label: 'Gallery site' },
+        { token: 'user', label: 'Uploader' }
+      ]
+    }
   })
 ];

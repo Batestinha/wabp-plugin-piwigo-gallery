@@ -24,7 +24,8 @@ import {
   pruneExpiredRegistrationOtps,
   saveAlbumAnnouncement,
   saveLinkRequest,
-  saveRegistrationOtp
+  saveRegistrationOtp,
+  type PiwigoAlbumAnnouncementFile
 } from './store';
 import { preparedGalleryDatabase } from './storageRuntime';
 
@@ -462,7 +463,12 @@ class PiwigoGalleryExternalActionRuntime {
       return { accepted: false, duplicate: false, reason: 'new album announcements are disabled for this scope' };
     }
     const albumId = input.albumId !== undefined ? String(input.albumId) : undefined;
-    const dedupeKey = `${input.eventId}:${albumId ?? 'album'}`;
+    const dedupeKey = albumId ? `album:${albumId}` : `event:${input.eventId}`;
+    const observedAt = input.observedAt ?? new Date().toISOString();
+    const observedDeadline = new Date(Math.max(
+      Date.now(),
+      new Date(observedAt).getTime() + config.newAlbumAnnouncementDelayMinutes * 60_000
+    )).toISOString();
     let existing = getAlbumAnnouncementByDedupeKey(database, input.scopeId, dedupeKey);
     if (existing) {
       if (existing.status === 'pending') {
@@ -485,6 +491,23 @@ class PiwigoGalleryExternalActionRuntime {
             announcementGroupWid
           }) ?? existing;
         }
+        if (!existing.claimId) {
+          const files = mergeAlbumAnnouncementFiles(existing.files, input.files);
+          const announceAt = existing.announceAt > observedDeadline ? existing.announceAt : observedDeadline;
+          const firstObservedAt = existing.observedAt < observedAt ? existing.observedAt : observedAt;
+          if (
+            files.length !== existing.files.length ||
+            announceAt !== existing.announceAt ||
+            firstObservedAt !== existing.observedAt
+          ) {
+            existing = saveAlbumAnnouncement(database, {
+              ...existing,
+              files,
+              observedAt: firstObservedAt,
+              announceAt
+            }, existing.version);
+          }
+        }
         throwIfAborted(signal);
         await enqueueAlbumAnnouncement(this.context, existing, announcementGroupWid, true);
       }
@@ -506,11 +529,6 @@ class PiwigoGalleryExternalActionRuntime {
     }
     throwIfAborted(signal);
 
-    const observedAt = input.observedAt ?? new Date().toISOString();
-    const announceAt = new Date(Math.max(
-      Date.now(),
-      new Date(observedAt).getTime() + config.newAlbumAnnouncementDelayMinutes * 60_000
-    )).toISOString();
     const announcementId = randomUUID();
     throwIfAborted(signal);
     const announcement = saveAlbumAnnouncement(database, {
@@ -528,12 +546,12 @@ class PiwigoGalleryExternalActionRuntime {
         mimeType: file.mimeType
       })),
       observedAt,
-      announceAt,
+      announceAt: observedDeadline,
       status: 'pending'
     });
     throwIfAborted(signal);
     await enqueueAlbumAnnouncement(this.context, announcement, announcementGroupWid, false);
-    return { accepted: true, duplicate: false, announcementId, announceAt };
+    return { accepted: true, duplicate: false, announcementId, announceAt: observedDeadline };
   }
 
   private eligibleScopesForWid(wid: string) {
@@ -726,6 +744,28 @@ function enqueueAlbumAnnouncement(
     payload: { announcementId: announcement.id },
     dedupeKey: `${PIWIGO_GALLERY_ANNOUNCE_NEW_ALBUM_JOB}:${announcement.id}${recoveryDedupeSuffix}`
   });
+}
+
+function mergeAlbumAnnouncementFiles(
+  existing: readonly PiwigoAlbumAnnouncementFile[],
+  incoming: readonly { imageId: number; filename: string; mimeType: string }[]
+): PiwigoAlbumAnnouncementFile[] {
+  const merged = existing.map((file) => ({ ...file }));
+  const imageIds = new Set(
+    existing
+      .map((file) => file.imageId)
+      .filter((imageId): imageId is number => imageId !== undefined)
+  );
+  for (const file of incoming) {
+    if (imageIds.has(file.imageId)) continue;
+    merged.push({
+      imageId: file.imageId,
+      filename: file.filename,
+      mimeType: file.mimeType
+    });
+    imageIds.add(file.imageId);
+  }
+  return merged;
 }
 
 export function formatWhatsappLinkRequestMessage(

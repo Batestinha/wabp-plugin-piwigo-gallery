@@ -160,7 +160,8 @@ export function supportsPiwigoEventAlbumSource(status: PiwigoStatusResult): bool
 export class PiwigoGalleryClient {
   constructor(
     private readonly connection: GalleryConnection,
-    private readonly timeoutMs = 15_000
+    private readonly timeoutMs = 15_000,
+    private readonly uploadTimeoutMs = 30 * 60_000
   ) {}
 
   acceptedTypes(): Promise<PiwigoAcceptedTypes> {
@@ -257,7 +258,12 @@ export class PiwigoGalleryClient {
       ? await openAsBlob(input.path, { type: input.mimeType })
       : new Blob([new Uint8Array(input.buffer!)], { type: input.mimeType });
     form.set('image', blob, input.filename);
-    return this.request('wabp.piwigo.media.uploadForJid', form, uploadResultSchema);
+    return this.request(
+      'wabp.piwigo.media.uploadForJid',
+      form,
+      uploadResultSchema,
+      this.uploadTimeoutMs
+    );
   }
 
   async downloadForBot(input: {
@@ -294,9 +300,14 @@ export class PiwigoGalleryClient {
     return this.request(method, body, resultSchema);
   }
 
-  private async request<T>(method: string, body: BodyInit, resultSchema: z.ZodType<T>): Promise<T> {
+  private async request<T>(
+    method: string,
+    body: BodyInit,
+    resultSchema: z.ZodType<T>,
+    timeoutMs = this.timeoutMs
+  ): Promise<T> {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
     const response = await fetch(`${this.connection.piwigoBaseUrl}/ws.php?format=json&method=${encodeURIComponent(method)}`, {
       method: 'POST',
       body,

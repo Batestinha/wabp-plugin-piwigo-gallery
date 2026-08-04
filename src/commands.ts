@@ -1256,19 +1256,32 @@ async function finalizeActiveUpload(context: PluginCommandContext, ctx: CommandC
   if (requested.kind !== 'queued') {
     return { handled: true, text: t('official.piwigo-gallery.noActiveUpload') };
   }
-  await runtime.enqueuePluginJob({
-    jobName: PIWIGO_GALLERY_FINALIZE_JOB,
-    scopeId: batch.scopeId,
-    ...(batch.groupId ? { groupId: batch.groupId } : {}),
-    groupWid: batch.groupWid,
-    payload: {
-      batchId: requested.batch.id,
-      deadlineGeneration: requested.batch.deadlineGeneration,
-      forced: true
-    },
-    dedupeKey: `${PIWIGO_GALLERY_FINALIZE_JOB}:${requested.batch.id}:${requested.batch.deadlineGeneration}:manual`
-  });
-  return { handled: true, text: t('official.piwigo-gallery.finalizeQueued') };
+  return {
+    handled: true,
+    pluginActions: [
+      {
+        type: 'message.sendText' as const,
+        chatId: ctx.message.chatId,
+        text: t('official.piwigo-gallery.finalizeQueued'),
+        idempotencyKey: `piwigo-gallery:upload-request:${ctx.message.id}`,
+        quotedMessageId: ctx.message.id
+      },
+      {
+        type: 'plugin.enqueueJob' as const,
+        pluginId: PIWIGO_GALLERY_PLUGIN_ID,
+        jobName: PIWIGO_GALLERY_FINALIZE_JOB,
+        scopeId: batch.scopeId,
+        runAt: new Date(requestedAt),
+        payload: {
+          batchId: requested.batch.id,
+          deadlineGeneration: requested.batch.deadlineGeneration,
+          forced: true
+        },
+        dedupeKey: `${PIWIGO_GALLERY_FINALIZE_JOB}:${requested.batch.id}:${requested.batch.deadlineGeneration}:manual`,
+        abortBatchOnFailure: true
+      }
+    ]
+  };
 }
 
 async function galleryBatchPermissionAllowed(

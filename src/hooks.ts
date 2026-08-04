@@ -39,6 +39,7 @@ import {
   getActiveBatchForActorWids,
   getActiveBatchForActorWidsAcrossScopes,
   getBatch,
+  markBatchFileFailed,
   markBatchFileUploaded,
   recordAlbumAnnouncementDownloadFailure,
   recordBatchFileUploadFailure,
@@ -49,6 +50,7 @@ import {
   type PiwigoAlbumAnnouncement,
   type PiwigoAlbumAnnouncementFile,
   type GalleryBatchFile,
+  type GalleryBatchFileFailureCode,
   type GalleryUploadBatch
 } from './store';
 import {
@@ -263,7 +265,7 @@ async function handleMessage(
       quotedMessageId: event.message.id,
       text: await t(context, event.scopeId, event.actorWid, 'official.piwigo-gallery.documentStaged', {
         count: String(append.fileCount),
-        expiresAt: append.autoFinalizeAt.toISOString()
+        minutes: String(batch.autoFinalizeMinutes)
       })
     },
     {
@@ -499,31 +501,8 @@ async function finalizeBatch(
   }
   let batch = claim.batch;
 
-  if (batch.files.filter((file) => file.status !== 'uploaded').length === 0) {
-    const status = batch.files.length === 0 ? 'expired' : 'completed';
-    const notificationText = await t(context, batch.scopeId, batch.actorWid, batch.files.length === 0
-      ? 'official.piwigo-gallery.expiredEmpty'
-      : 'official.piwigo-gallery.completed', {
-        uploaded: String(batch.files.length),
-        album: batch.albumLabel ?? ''
-    });
-    const completed = completeBatchFinalization(db, {
-      scopeId: batch.scopeId,
-      batchId: batch.id,
-      claimId,
-      status,
-      completedAt: new Date().toISOString(),
-      ...(batch.albumLabel ? { albumLabel: batch.albumLabel } : {}),
-      notification: {
-        text: notificationText,
-        deliveryKey: batchTerminalNotificationKey(batch)
-      }
-    });
-    if (completed.kind !== 'completed') {
-      return;
-    }
-    batch = completed.batch;
-    return terminalBatchMaintenanceActions(context, db, batch);
+  if (batch.files.every((file) => file.status === 'uploaded' || file.status === 'failed')) {
+    return completeBatchUploadResults(context, db, batch, claimId);
   }
   await enqueueBatchClaimRecovery(context, job, batch);
 
@@ -557,7 +536,7 @@ async function finalizeBatch(
   let uploadIdempotencySupported: boolean | undefined;
   let eventAlbumSourceSupported: boolean | undefined;
   for (const file of batch.files) {
-    if (file.status === 'uploaded') {
+    if (file.status === 'uploaded' || file.status === 'failed') {
       continue;
     }
     const renewed = renewBatchFinalizationLease(db, batch, claimId);
@@ -566,7 +545,7 @@ async function finalizeBatch(
     }
     batch = renewed.batch;
     let activeFile = batch.files.find((candidate) => candidate.messageId === file.messageId);
-    if (!activeFile || activeFile.status === 'uploaded') {
+    if (!activeFile || activeFile.status === 'uploaded' || activeFile.status === 'failed') {
       continue;
     }
     if (
@@ -713,43 +692,87 @@ async function finalizeBatch(
       if (isAmbiguousPiwigoOutcome(error)) {
         return deferAmbiguousBatchUpload(context, db, batch, activeFile, claimId, error);
       }
-      return failBatch(
-        context,
-        db,
-        batch,
+      const failed = markBatchFileFailed(db, {
+        scopeId: batch.scopeId,
+        batchId: batch.id,
+        messageId: activeFile.messageId,
         claimId,
-        await t(
-          context,
-          batch.scopeId,
-          batch.actorWid,
-          userFacingPiwigoErrorKey(error)
-        ),
-        errorMessage(error)
-      );
+        attemptId,
+        failureCode: failureCodeForPiwigoError(error),
+        error: errorMessage(error),
+        failedAt: new Date().toISOString()
+      });
+      if (failed.kind !== 'failed' && failed.kind !== 'already_failed') {
+        return;
+      }
+      batch = failed.batch;
+      await cleanupBatchMedia(context, db, batch);
     }
   }
+  return completeBatchUploadResults(context, db, batch, claimId);
+}
 
-  const notificationText = await t(context, batch.scopeId, batch.actorWid, 'official.piwigo-gallery.completed', {
-    uploaded: String(batch.files.filter((file) => file.status === 'uploaded').length),
-    album: batch.albumLabel ?? ''
-  });
+async function completeBatchUploadResults(
+  context: PluginRuntimeContext,
+  db: Awaited<ReturnType<typeof preparedGalleryDatabase>>,
+  batch: GalleryUploadBatch,
+  claimId: string
+): Promise<PluginAction[]> {
+  const uploaded = batch.files.filter((file) => file.status === 'uploaded');
+  const failed = batch.files.filter((file) => file.status === 'failed');
+  const empty = batch.files.length === 0;
+  const status = empty ? 'expired' : failed.length > 0 ? 'failed' : 'completed';
+  const notificationText = empty
+    ? await t(context, batch.scopeId, batch.actorWid, 'official.piwigo-gallery.expiredEmpty')
+    : failed.length > 0
+      ? await t(context, batch.scopeId, batch.actorWid, 'official.piwigo-gallery.completedWithFailures', {
+          uploaded: String(uploaded.length),
+          total: String(batch.files.length),
+          failed: String(failed.length),
+          failedFiles: failed.map((file) => file.filename).join(', ')
+        })
+      : await t(context, batch.scopeId, batch.actorWid, 'official.piwigo-gallery.completed', {
+          uploaded: String(uploaded.length),
+          album: batch.albumLabel ?? ''
+        });
+  const auditReason = failed.length > 0
+    ? failed.map((file) => `${file.filename}: ${file.uploadLastError ?? file.failureCode ?? 'rejected'}`).join('; ')
+    : undefined;
   const completed = completeBatchFinalization(db, {
     scopeId: batch.scopeId,
     batchId: batch.id,
     claimId,
-    status: 'completed',
+    status,
     completedAt: new Date().toISOString(),
     ...(batch.albumLabel ? { albumLabel: batch.albumLabel } : {}),
+    ...(auditReason ? { error: auditReason } : {}),
     notification: {
       text: notificationText,
       deliveryKey: batchTerminalNotificationKey(batch)
     }
   });
   if (completed.kind !== 'completed') {
-    return;
+    return [];
   }
-  batch = completed.batch;
-  return terminalBatchMaintenanceActions(context, db, batch);
+  const actions = await terminalBatchMaintenanceActions(context, db, completed.batch);
+  if (failed.length > 0) {
+    actions.unshift({
+      type: 'audit.record',
+      action: 'piwigo-gallery.finalize.partial',
+      metadataJson: {
+        batchId: batch.id,
+        scopeId: batch.scopeId,
+        uploaded: uploaded.length,
+        failed: failed.map((file) => ({
+          messageId: file.messageId,
+          filename: file.filename,
+          failureCode: file.failureCode,
+          reason: file.uploadLastError
+        }))
+      }
+    });
+  }
+  return actions;
 }
 
 async function deferAmbiguousBatchUpload(
@@ -877,6 +900,13 @@ function isAmbiguousPiwigoOutcome(error: unknown): boolean {
     status === 425 ||
     status === 429 ||
     (status !== undefined && status >= 500);
+}
+
+function failureCodeForPiwigoError(error: unknown): GalleryBatchFileFailureCode {
+  if (error instanceof PiwigoApiError && (error.piwigoCode ?? error.httpStatus) === 413) {
+    return 'too-large';
+  }
+  return 'request-rejected';
 }
 
 async function failBatch(
@@ -1788,10 +1818,8 @@ function errorMessage(error: unknown): string {
 }
 
 function userFacingPiwigoErrorKey(error: unknown): string {
-  return error instanceof PiwigoApiError &&
-    error.piwigoCode !== undefined &&
-    error.piwigoCode >= 400 &&
-    error.piwigoCode < 500
+  const status = error instanceof PiwigoApiError ? error.piwigoCode ?? error.httpStatus : undefined;
+  return status !== undefined && status >= 400 && status < 500
     ? 'official.piwigo-gallery.error.requestRejected'
     : 'official.piwigo-gallery.error.serviceUnavailable';
 }

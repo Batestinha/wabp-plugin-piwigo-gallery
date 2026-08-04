@@ -314,7 +314,7 @@ export class PiwigoGalleryClient {
         method,
         response.status,
         undefined,
-        { cause: error, ambiguousOutcome: true }
+        { cause: error, ambiguousOutcome: isAmbiguousHttpOutcome(response.status) }
       );
     }
     const failure = piwigoFailureSchema.safeParse(payload);
@@ -348,4 +348,9 @@ export class PiwigoGalleryClient {
     }
     return result.data;
   }
+}
+
+function isAmbiguousHttpOutcome(status: number): boolean {
+  return status >= 500 || status === 408 || status === 423 || status === 425 || status === 429 ||
+    (status >= 200 && status < 300);
 }

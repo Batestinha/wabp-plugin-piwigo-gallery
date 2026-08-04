@@ -1123,16 +1123,14 @@ function registerUploadFlowCompletionHandler(context: PluginCommandContext): voi
         snapshot.conversationChatId,
         t('official.piwigo-gallery.collectingReadyElsewhere', {
           minutes: String(stored.autoFinalizeMinutes),
-          target,
-          expiresAt: stored.autoFinalizeAt
+          target
         }),
         { idempotencyKey: `piwigo-gallery:flow:${lock.flowSessionId}:collection-handoff` }
       );
     }
     await activeTransport.sendText(collectionChatId, t('official.piwigo-gallery.collectingReady', {
       minutes: String(stored.autoFinalizeMinutes),
-      target,
-      expiresAt: stored.autoFinalizeAt
+      target
     }), {
       idempotencyKey: `piwigo-gallery:flow:${lock.flowSessionId}:collecting-ready`
     });

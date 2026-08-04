@@ -60,19 +60,23 @@ export interface GalleryBatchFile {
   filename: string;
   mimeType: string;
   sizeBytes: number;
-  status: 'staged' | 'uploading' | 'uploaded';
+  status: 'staged' | 'uploading' | 'uploaded' | 'failed';
   acceptedAt?: string | undefined;
   uploadAttemptId?: string | undefined;
   uploadStartedAt?: string | undefined;
   uploadRetryCount?: number | undefined;
   uploadNextRetryAt?: string | undefined;
   uploadLastError?: string | undefined;
+  failureCode?: GalleryBatchFileFailureCode | undefined;
+  failedAt?: string | undefined;
   imageId?: number | undefined;
   url?: string | undefined;
   uploadedAt?: string | undefined;
   cleanupPending?: boolean | undefined;
   cleanupCompletedAt?: string | undefined;
 }
+
+export type GalleryBatchFileFailureCode = 'too-large' | 'request-rejected';
 
 export interface GalleryUploadBatch {
   id: string;
@@ -276,6 +280,8 @@ interface BatchFileRow extends PluginDatabaseRow {
   upload_retry_count: number;
   upload_next_retry_at: string | null;
   upload_last_error: string | null;
+  failure_code: GalleryBatchFileFailureCode | null;
+  failed_at: string | null;
   uploaded_at: string | null;
   cleanup_pending: number;
   cleanup_completed_at: string | null;
@@ -767,6 +773,14 @@ export type MarkBatchFileUploadedResult =
   | { kind: 'claim_lost'; batch: StoredGalleryUploadBatch }
   | { kind: 'file_missing'; batch: StoredGalleryUploadBatch };
 
+export type MarkBatchFileFailedResult =
+  | { kind: 'failed'; batch: StoredGalleryUploadBatch; file: GalleryBatchFile }
+  | { kind: 'already_failed'; batch: StoredGalleryUploadBatch; file: GalleryBatchFile }
+  | { kind: 'missing' }
+  | { kind: 'claim_lost'; batch: StoredGalleryUploadBatch }
+  | { kind: 'file_missing'; batch: StoredGalleryUploadBatch }
+  | { kind: 'attempt_lost'; batch: StoredGalleryUploadBatch; file: GalleryBatchFile };
+
 export type BeginBatchFileUploadResult =
   | { kind: 'uploading'; batch: StoredGalleryUploadBatch; file: GalleryBatchFile }
   | { kind: 'already_uploading'; batch: StoredGalleryUploadBatch; file: GalleryBatchFile }
@@ -1039,6 +1053,67 @@ export function markBatchFileUploaded(db: PluginDatabase, input: {
   });
 }
 
+/** Records a confirmed, non-retryable rejection and leaves the batch claim active. */
+export function markBatchFileFailed(db: PluginDatabase, input: {
+  scopeId: string;
+  batchId: string;
+  messageId: string;
+  claimId: string;
+  attemptId: string;
+  failureCode: GalleryBatchFileFailureCode;
+  error: string;
+  failedAt: string;
+}): MarkBatchFileFailedResult {
+  return db.transaction(() => {
+    const batch = getBatch(db, input.scopeId, input.batchId);
+    if (!batch) return { kind: 'missing' };
+    if (batch.status !== 'finalizing' || batch.finalizationClaimId !== input.claimId) {
+      return { kind: 'claim_lost', batch };
+    }
+    const file = batch.files.find((candidate) => candidate.messageId === input.messageId);
+    if (!file) return { kind: 'file_missing', batch };
+    if (file.status === 'failed') return { kind: 'already_failed', batch, file };
+    if (file.status !== 'uploading' || file.uploadAttemptId !== input.attemptId) {
+      return { kind: 'attempt_lost', batch, file };
+    }
+    const updatedFile = db.run(
+      `UPDATE gallery_upload_batch_files
+          SET status = 'failed', failure_code = ?, failed_at = ?, upload_last_error = ?,
+              upload_next_retry_at = NULL, cleanup_pending = 1, cleanup_completed_at = NULL
+        WHERE batch_id = ? AND message_id = ? AND status = 'uploading'
+          AND upload_attempt_id = ?`,
+      input.failureCode,
+      input.failedAt,
+      input.error,
+      input.batchId,
+      input.messageId,
+      input.attemptId
+    );
+    const updatedBatch = db.run(
+      `UPDATE gallery_upload_batches
+          SET updated_at = ?, version = version + 1
+        WHERE id = ? AND scope_id = ? AND status = 'finalizing'
+          AND finalization_claim_id = ? AND version = ?`,
+      input.failedAt,
+      input.batchId,
+      input.scopeId,
+      input.claimId,
+      batch.version
+    );
+    if (updatedFile.changes !== 1 || updatedBatch.changes !== 1) {
+      throw new GalleryStorageConflictError(
+        `Gallery upload file ${input.messageId} changed while recording a confirmed failure.`
+      );
+    }
+    const stored = requireBatch(db, input.scopeId, input.batchId);
+    return {
+      kind: 'failed',
+      batch: stored,
+      file: stored.files.find((candidate) => candidate.messageId === input.messageId)!
+    };
+  });
+}
+
 export function completeBatchFileCleanup(db: PluginDatabase, input: {
   scopeId: string;
   batchId: string;
@@ -1213,8 +1288,7 @@ export function completeBatchFinalization(db: PluginDatabase, input: {
       db.run(
         `UPDATE gallery_upload_batch_files
             SET cleanup_pending = 1, cleanup_completed_at = NULL
-          WHERE batch_id = ? AND cleanup_pending = 0
-            AND (status <> 'uploaded' OR cleanup_completed_at IS NULL)`,
+          WHERE batch_id = ? AND cleanup_pending = 0 AND cleanup_completed_at IS NULL`,
         input.batchId
       );
     }
@@ -2098,8 +2172,8 @@ function insertBatchFile(db: PluginDatabase, batchId: string, file: GalleryBatch
       batch_id, media_id, message_id, filename, mime_type, size_bytes, status,
       image_id, url, accepted_at, upload_attempt_id, upload_started_at, uploaded_at,
       upload_retry_count, upload_next_retry_at, upload_last_error,
-      cleanup_pending, cleanup_completed_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      failure_code, failed_at, cleanup_pending, cleanup_completed_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     batchId,
     file.mediaId,
     file.messageId,
@@ -2116,6 +2190,8 @@ function insertBatchFile(db: PluginDatabase, batchId: string, file: GalleryBatch
     file.uploadRetryCount ?? 0,
     file.uploadNextRetryAt ?? null,
     file.uploadLastError ?? null,
+    file.failureCode ?? null,
+    file.failedAt ?? null,
     file.cleanupPending ? 1 : 0,
     file.cleanupCompletedAt ?? null
   );
@@ -2221,6 +2297,8 @@ function batchFileFromRow(row: BatchFileRow): GalleryBatchFile {
     ...(row.upload_retry_count > 0 ? { uploadRetryCount: row.upload_retry_count } : {}),
     ...(row.upload_next_retry_at ? { uploadNextRetryAt: row.upload_next_retry_at } : {}),
     ...(row.upload_last_error ? { uploadLastError: row.upload_last_error } : {}),
+    ...(row.failure_code ? { failureCode: row.failure_code } : {}),
+    ...(row.failed_at ? { failedAt: row.failed_at } : {}),
     ...(row.image_id !== null ? { imageId: row.image_id } : {}),
     ...(row.url ? { url: row.url } : {}),
     ...(row.uploaded_at ? { uploadedAt: row.uploaded_at } : {}),

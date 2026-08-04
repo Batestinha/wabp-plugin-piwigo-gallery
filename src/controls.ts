@@ -82,10 +82,10 @@ export const piwigoGalleryControls: ControlDescriptor[] = [
   control({
     path: 'maxFileBytes',
     label: 'Max file size',
-    description: 'Maximum accepted WhatsApp document size for gallery uploads.',
+    description: 'Optional WhatsApp document size cap for gallery uploads. Set 0 for no plugin-specific limit.',
     order: 50,
-    schema: { type: 'number', unit: 'bytes', min: 1, max: 25 * 1024 * 1024 * 1024 },
-    ui: { widget: 'number' }
+    schema: { type: 'number', unit: 'bytes', min: 0, max: 25 * 1024 * 1024 * 1024 },
+    ui: { widget: 'number', helpText: 'Set 0 to rely on WhatsApp, available storage, and the gallery server without an additional plugin cap.' }
   }),
   control({
     path: 'mediaDumpDocumentsHint',

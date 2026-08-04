@@ -22,6 +22,7 @@ import {
 } from '../shared';
 import {
   parsePiwigoGalleryConfig,
+  resolvePiwigoUploadMaxBytes,
   resolvePiwigoAccountProfileUrl,
   resolvePiwigoBaseUrl,
   type GalleryConnection,
@@ -699,9 +700,9 @@ async function startUploadFlow(
           piwigoLinkedWid: target.actor.whatsappJid,
           actorLabel: ctx.message.senderDisplayName ?? ctx.message.senderWid,
           acceptedExtensions: acceptedTypes.extensions,
-          maxFileBytes: Math.min(
+          maxFileBytes: resolvePiwigoUploadMaxBytes(
             target.config.maxFileBytes,
-            acceptedTypes.max_file_size ?? target.config.maxFileBytes
+            acceptedTypes.max_file_size
           ),
           autoFinalizeMinutes: target.config.autoFinalizeMinutes,
           createdAt: new Date().toISOString()
@@ -1502,7 +1503,7 @@ function parseConfigPatch(args: string[]): Record<string, unknown> | undefined {
       case 'max':
       case 'maxbytes': {
         const bytes = Number(value);
-        if (!Number.isSafeInteger(bytes) || bytes < 1) return undefined;
+        if (!Number.isSafeInteger(bytes) || bytes < 0) return undefined;
         patch.maxFileBytes = bytes;
         break;
       }

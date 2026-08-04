@@ -69,7 +69,7 @@ const piwigoFailureSchema = z.object({
 const acceptedTypesSchema = z.object({
   extensions: z.array(z.string().trim().min(1)).min(1),
   media_only: z.boolean().optional(),
-  max_file_size: z.number().int().positive().nullable().optional()
+  max_file_size: z.number().int().nonnegative().nullable().optional()
 }).passthrough();
 
 const statusSchema = z.object({

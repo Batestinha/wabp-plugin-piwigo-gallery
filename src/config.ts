@@ -3,11 +3,12 @@ import { z } from 'zod';
 export const PIWIGO_GALLERY_DEFAULT_BASE_URL_ENV = 'PIWIGO_GALLERY_DEFAULT_BASE_URL';
 export const PIWIGO_GALLERY_DEFAULT_BOT_SECRET_ENV = 'PIWIGO_GALLERY_DEFAULT_BOT_SECRET';
 export const PIWIGO_GALLERY_ACCOUNT_PROFILE_URL_ENV = 'PIWIGO_GALLERY_ACCOUNT_PROFILE_URL';
+export const PIWIGO_GALLERY_UNLIMITED_FILE_BYTES = Number.MAX_SAFE_INTEGER;
 
 export const piwigoGalleryConfigSchema = z.object({
   enabled: z.boolean().default(false),
   autoFinalizeMinutes: z.number().int().min(1).max(24 * 60).default(30),
-  maxFileBytes: z.number().int().positive().max(25 * 1024 * 1024 * 1024).default(512 * 1024 * 1024),
+  maxFileBytes: z.number().int().min(0).max(25 * 1024 * 1024 * 1024).default(0),
   access: z.object({
     allowScopeMemberUploads: z.boolean().default(false),
     allowScopeMemberDownloads: z.boolean().default(false)
@@ -29,6 +30,20 @@ export interface GalleryConnection {
 
 export function parsePiwigoGalleryConfig(input: unknown): PiwigoGalleryConfig {
   return piwigoGalleryConfigSchema.parse(input);
+}
+
+/**
+ * Zero is the explicit no-configured-limit value in both the plugin and the
+ * Piwigo deployment contract. Persist a positive sentinel in upload batches
+ * because their immutable storage schema predates that configuration choice.
+ */
+export function resolvePiwigoUploadMaxBytes(
+  configuredMaxFileBytes: number,
+  advertisedMaxFileBytes?: number | null | undefined
+): number {
+  const limits = [configuredMaxFileBytes, advertisedMaxFileBytes]
+    .filter((value): value is number => value !== null && value !== undefined && value > 0);
+  return limits.length > 0 ? Math.min(...limits) : PIWIGO_GALLERY_UNLIMITED_FILE_BYTES;
 }
 
 export function configConnection(

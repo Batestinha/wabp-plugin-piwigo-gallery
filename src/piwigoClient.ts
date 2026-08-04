@@ -1,4 +1,5 @@
 import type { GalleryConnection } from './config';
+import { openAsBlob } from 'node:fs';
 import { z } from 'zod';
 import type { GalleryAlbumSource } from './albumMetadata';
 
@@ -224,7 +225,8 @@ export class PiwigoGalleryClient {
     albumSource: GalleryAlbumSource;
     filename: string;
     mimeType: string;
-    buffer: Buffer;
+    buffer?: Buffer | undefined;
+    path?: string | undefined;
   }): Promise<PiwigoUploadResult> {
     const idempotencyKey = uploadIdempotencyKeySchema.parse(input.idempotencyKey);
     const form = new FormData();
@@ -241,7 +243,19 @@ export class PiwigoGalleryClient {
       form.set('source_revision', input.albumSource.revision);
       form.set('source_label', input.albumSource.title);
     }
-    const blob = new Blob([new Uint8Array(input.buffer)], { type: input.mimeType });
+    return this.uploadFile(form, input);
+  }
+
+  private async uploadFile(
+    form: FormData,
+    input: { filename: string; mimeType: string; buffer?: Buffer | undefined; path?: string | undefined }
+  ): Promise<PiwigoUploadResult> {
+    if (Boolean(input.buffer) === Boolean(input.path)) {
+      throw new Error('Piwigo upload requires exactly one media buffer or file path.');
+    }
+    const blob = input.path
+      ? await openAsBlob(input.path, { type: input.mimeType })
+      : new Blob([new Uint8Array(input.buffer!)], { type: input.mimeType });
     form.set('image', blob, input.filename);
     return this.request('wabp.piwigo.media.uploadForJid', form, uploadResultSchema);
   }

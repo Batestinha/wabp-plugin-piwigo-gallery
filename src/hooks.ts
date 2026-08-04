@@ -224,6 +224,11 @@ async function handleMessage(
     })];
   }
 
+  const declaredSizeBytes = event.message.media?.sizeBytes;
+  if (declaredSizeBytes !== undefined && declaredSizeBytes > batch.maxFileBytes) {
+    return [await reply(context, event, 'official.piwigo-gallery.fileTooLarge')];
+  }
+
   const staged = await context.mediaStore.stageMessage(event.message.id, {
     fallbackFilename: fallbackFilename(event.message.mediaMimeType),
     allowedExtensions: batch.acceptedExtensions,
@@ -583,8 +588,11 @@ async function finalizeBatch(
         ? [batchUploadRetryAction(released.batch, releasedFile, `early-reschedule:${randomUUID()}`)]
         : undefined;
     }
-    const stored = await context.mediaStore.read(activeFile.mediaId);
-    if (!stored) {
+    const storedFile = context.mediaStore.openFile
+      ? await context.mediaStore.openFile(activeFile.mediaId)
+      : undefined;
+    const stored = storedFile ? undefined : await context.mediaStore.read(activeFile.mediaId);
+    if (!storedFile && !stored) {
       return failBatch(
         context,
         db,
@@ -682,7 +690,7 @@ async function finalizeBatch(
           albumSource: batch.albumSource,
           filename: activeFile.filename,
           mimeType: activeFile.mimeType,
-          buffer: stored.buffer
+          ...(storedFile ? { path: storedFile.path } : { buffer: stored!.buffer })
         })
       );
       const marked = markBatchFileUploaded(db, {

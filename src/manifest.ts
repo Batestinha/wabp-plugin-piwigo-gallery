@@ -33,7 +33,7 @@ export const piwigoGalleryDatabases = [{
 export const piwigoGalleryManifest: PluginManifest = {
   pluginId: PIWIGO_GALLERY_PLUGIN_ID,
   kind: 'managed_group',
-  version: '0.10.0',
+  version: '0.10.1',
   coreApiRange: '>=0.2.0',
   messageNamespace: 'official.piwigo-gallery',
   descriptionKey: 'official.piwigo-gallery.description',
@@ -171,7 +171,7 @@ export const piwigoGalleryManifest: PluginManifest = {
     }
   ],
   databases: piwigoGalleryDatabases,
-  dataVersion: '9',
+  dataVersion: '10',
   dependencies: [
     { pluginId: 'official.community-events', versionRange: '>=0.5.0', optional: true }
   ],

@@ -507,22 +507,23 @@ class PiwigoGalleryExternalActionRuntime {
             announcementGroupWid
           }) ?? existing;
         }
-        if (!existing.claimId) {
-          const files = mergeAlbumAnnouncementFiles(existing.files, input.files);
-          const announceAt = existing.announceAt > observedDeadline ? existing.announceAt : observedDeadline;
-          const firstObservedAt = existing.observedAt < observedAt ? existing.observedAt : observedAt;
-          if (
-            files.length !== existing.files.length ||
-            announceAt !== existing.announceAt ||
-            firstObservedAt !== existing.observedAt
-          ) {
-            existing = saveAlbumAnnouncement(database, {
-              ...existing,
-              files,
-              observedAt: firstObservedAt,
-              announceAt
-            }, existing.version);
-          }
+        const files = mergeAlbumAnnouncementFiles(existing.files, input.files);
+        const announceAt = existing.announceAt > observedDeadline ? existing.announceAt : observedDeadline;
+        const firstObservedAt = existing.observedAt < observedAt ? existing.observedAt : observedAt;
+        const requiresMerge =
+          files.length !== existing.files.length ||
+          announceAt !== existing.announceAt ||
+          firstObservedAt !== existing.observedAt;
+        if (existing.claimId && requiresMerge) {
+          throw httpError(425, 'The album announcement is currently being delivered; retry this observation.');
+        }
+        if (requiresMerge) {
+          existing = saveAlbumAnnouncement(database, {
+            ...existing,
+            files,
+            observedAt: firstObservedAt,
+            announceAt
+          }, existing.version);
         }
         throwIfAborted(signal);
         await enqueueAlbumAnnouncement(this.context, existing, announcementGroupWid, true);

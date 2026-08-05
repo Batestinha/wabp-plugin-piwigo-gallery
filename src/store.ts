@@ -33,11 +33,10 @@ export interface GalleryUploadDraft {
   groupWid: string;
   /** Exact physical managed-group provenance. It must be the same group as groupWid. */
   chatId: string;
-  /** Chat where documents are collected. Legacy callers default to chatId. */
-  collectionChatId?: string | undefined;
+  /** Exact chat where documents are collected. */
+  collectionChatId: string;
   actorWid: string;
-  actorAliases?: string[] | undefined;
-  actorIdentityId?: string | undefined;
+  actorIdentityId: string;
   piwigoLinkedWid?: string | undefined;
   actorLabel: string;
   acceptedExtensions: string[];
@@ -87,11 +86,10 @@ export interface GalleryUploadBatch {
   groupWid: string;
   /** Exact physical managed-group provenance. It must be the same group as groupWid. */
   chatId: string;
-  /** Chat where documents are collected. Legacy callers default to chatId. */
-  collectionChatId?: string | undefined;
+  /** Exact chat where documents are collected. */
+  collectionChatId: string;
   actorWid: string;
-  actorAliases?: string[] | undefined;
-  actorIdentityId?: string | undefined;
+  actorIdentityId: string;
   piwigoLinkedWid?: string | undefined;
   actorLabel: string;
   onde: string;
@@ -126,10 +124,11 @@ export interface GalleryBatchTerminalNotification {
 }
 
 export interface StoredGalleryUploadBatch extends GalleryUploadBatch {
-  collectionChatId: string;
   deadlineGeneration: number;
   version: number;
 }
+
+export type NewGalleryUploadBatch = GalleryUploadBatch;
 
 export interface GalleryScopeOption {
   scopeId: string;
@@ -139,9 +138,8 @@ export interface GalleryScopeOption {
 export interface GalleryLinkRequest {
   requestId: string;
   requestToken: string;
-  phone?: string | undefined;
+  identityId: string;
   whatsappJid: string;
-  whatsappAliases?: string[] | undefined;
   siteLabel: string;
   linkChoiceCount: number;
   scopeOptions: GalleryScopeOption[];
@@ -193,7 +191,8 @@ export interface StoredPiwigoAlbumAnnouncement extends PiwigoAlbumAnnouncement {
 
 export interface GalleryRegistrationOtpRequest {
   requestId: string;
-  wid: string;
+  identityId: string;
+  whatsappJid: string;
   displayName?: string | undefined;
   otpHash: string;
   status?: 'active' | 'consumed' | 'locked' | 'expired' | undefined;
@@ -211,7 +210,6 @@ interface DraftRow extends PluginDatabaseRow {
   chat_id: string;
   collection_chat_id: string;
   actor_wid: string;
-  actor_aliases_json: string;
   actor_identity_id: string | null;
   piwigo_linked_wid: string | null;
   actor_label: string;
@@ -232,7 +230,6 @@ interface BatchRow extends PluginDatabaseRow {
   chat_id: string;
   collection_chat_id: string;
   actor_wid: string;
-  actor_aliases_json: string;
   actor_identity_id: string | null;
   piwigo_linked_wid: string | null;
   actor_label: string;
@@ -291,7 +288,7 @@ interface LinkRequestRow extends PluginDatabaseRow {
   token_key: string;
   request_token: string;
   request_id: string;
-  phone: string | null;
+  identity_id: string;
   whatsapp_jid: string;
   site_label: string;
   link_choice_count: number;
@@ -302,10 +299,6 @@ interface LinkRequestRow extends PluginDatabaseRow {
 interface LinkRequestScopeRow extends PluginDatabaseRow {
   scope_id: string;
   label: string;
-}
-
-interface LinkRequestAliasRow extends PluginDatabaseRow {
-  wid: string;
 }
 
 interface AnnouncementRow extends PluginDatabaseRow {
@@ -345,7 +338,8 @@ interface AnnouncementFileRow extends PluginDatabaseRow {
 
 interface RegistrationOtpRow extends PluginDatabaseRow {
   request_id: string;
-  wid: string;
+  identity_id: string;
+  whatsapp_jid: string;
   display_name: string | null;
   otp_hash: string;
   expires_at: string;
@@ -385,22 +379,20 @@ export async function resolveGalleryConnection(
 
 export function saveDraft(db: PluginDatabase, draft: GalleryUploadDraft): StoredGalleryUploadDraft {
   assertExactTarget(draft.groupWid, draft.chatId);
+  const actorIdentityId = requireActorIdentityId(draft);
   const updatedAt = draft.updatedAt ?? draft.createdAt;
   return db.transaction(() => {
     const existing = getDraft(db, draft.scopeId, draft.flowSessionId);
-    const collectionChatId = normalizeCollectionChatId(
-      draft.collectionChatId ?? existing?.collectionChatId ?? draft.chatId
-    );
+    const collectionChatId = normalizeCollectionChatId(draft.collectionChatId);
     if (existing) {
       assertSameTarget(existing, { ...draft, collectionChatId }, 'gallery upload draft');
       const result = db.run(
         `UPDATE gallery_upload_drafts
-            SET flow_type = ?, actor_aliases_json = ?, piwigo_linked_wid = ?, actor_label = ?,
+            SET flow_type = ?, piwigo_linked_wid = ?, actor_label = ?,
                 accepted_extensions_json = ?, max_file_bytes = ?, auto_finalize_minutes = ?,
                 updated_at = ?, version = version + 1
           WHERE flow_session_id = ? AND scope_id = ? AND version = ?`,
         draft.flowType,
-        JSON.stringify(uniqueWids([draft.actorWid, ...(draft.actorAliases ?? [])])),
         draft.piwigoLinkedWid ?? null,
         draft.actorLabel,
         JSON.stringify(uniqueStrings(draft.acceptedExtensions)),
@@ -418,10 +410,10 @@ export function saveDraft(db: PluginDatabase, draft: GalleryUploadDraft): Stored
       db.run(
         `INSERT INTO gallery_upload_drafts (
           flow_session_id, flow_type, scope_id, group_id, group_wid, chat_id, collection_chat_id, actor_wid,
-          actor_aliases_json, actor_identity_id, piwigo_linked_wid, actor_label,
+          actor_identity_id, piwigo_linked_wid, actor_label,
           accepted_extensions_json, max_file_bytes, auto_finalize_minutes,
           created_at, updated_at, version
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
         draft.flowSessionId,
         draft.flowType,
         draft.scopeId,
@@ -430,8 +422,7 @@ export function saveDraft(db: PluginDatabase, draft: GalleryUploadDraft): Stored
         normalizeWid(draft.chatId),
         collectionChatId,
         normalizeWid(draft.actorWid),
-        JSON.stringify(uniqueWids([draft.actorWid, ...(draft.actorAliases ?? [])])),
-        draft.actorIdentityId ?? null,
+        actorIdentityId,
         draft.piwigoLinkedWid ? normalizeWid(draft.piwigoLinkedWid) : null,
         draft.actorLabel,
         JSON.stringify(uniqueStrings(draft.acceptedExtensions)),
@@ -474,44 +465,41 @@ export function deleteDraft(db: PluginDatabase, scopeId: string, flowSessionId: 
 
 export function createBatch(
   db: PluginDatabase,
-  batch: GalleryUploadBatch,
+  batch: NewGalleryUploadBatch,
   options: { draftFlowSessionId?: string | undefined } = {}
 ): StoredGalleryUploadBatch {
   if (batch.status !== 'collecting') {
     throw new GalleryStorageInvariantError('New gallery upload batches must start in collecting state.');
   }
   assertExactTarget(batch.groupWid, batch.chatId);
+  const actorIdentityId = requireActorIdentityId(batch);
   const storedBatch = {
     ...batch,
-    collectionChatId: normalizeCollectionChatId(batch.collectionChatId ?? batch.chatId)
+    collectionChatId: normalizeCollectionChatId(batch.collectionChatId)
   };
   return db.transaction(() => {
-    for (const actorWid of batchActorWids(storedBatch)) {
-      const active = activeBatchActorClaim(
-        db,
-        storedBatch.scopeId,
-        storedBatch.collectionChatId,
-        actorWid
+    const active = activeBatchIdentityClaim(
+      db,
+      storedBatch.scopeId,
+      storedBatch.collectionChatId,
+      actorIdentityId
+    );
+    if (active && active.batch_id !== batch.id) {
+      throw new GalleryStorageConflictError(
+        `Identity ${actorIdentityId} already has active gallery upload ${active.batch_id} in ${storedBatch.collectionChatId}.`
       );
-      if (active && active.batch_id !== batch.id) {
-        throw new GalleryStorageConflictError(
-          `Actor ${actorWid} already has active gallery upload ${active.batch_id} in ${storedBatch.collectionChatId}.`
-        );
-      }
     }
     insertBatch(db, storedBatch);
-    for (const actorWid of batchActorWids(storedBatch)) {
-      db.run(
-        `INSERT INTO gallery_active_batch_actors
-          (scope_id, collection_chat_id, actor_wid, batch_id, created_at)
-         VALUES (?, ?, ?, ?, ?)`,
-        storedBatch.scopeId,
-        storedBatch.collectionChatId,
-        actorWid,
-        storedBatch.id,
-        storedBatch.createdAt
-      );
-    }
+    db.run(
+      `INSERT INTO gallery_active_batch_identities
+        (scope_id, collection_chat_id, actor_identity_id, batch_id, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      storedBatch.scopeId,
+      storedBatch.collectionChatId,
+      actorIdentityId,
+      storedBatch.id,
+      storedBatch.createdAt
+    );
     if (options.draftFlowSessionId) {
       const deleted = deleteDraft(db, batch.scopeId, options.draftFlowSessionId);
       if (deleted !== 1) {
@@ -541,65 +529,55 @@ export function getActiveBatch(
   db: PluginDatabase,
   scopeId: string,
   chatId: string,
-  actorWid: string
+  actorIdentityId: string
 ): StoredGalleryUploadBatch | undefined {
+  const normalizedActorIdentityId = normalizeIdentityId(actorIdentityId);
   const active = db.get<{ batch_id: string }>(
-    `SELECT batch_id FROM gallery_active_batch_actors
-      WHERE scope_id = ? AND collection_chat_id = ? AND actor_wid = ?`,
+    `SELECT batch_id FROM gallery_active_batch_identities
+      WHERE scope_id = ? AND collection_chat_id = ? AND actor_identity_id = ?`,
     scopeId,
     normalizeCollectionChatId(chatId),
-    normalizeWid(actorWid)
+    normalizedActorIdentityId
   );
-  return active?.batch_id ? getBatch(db, scopeId, active.batch_id) : undefined;
-}
-
-export function getActiveBatchForActorWids(
-  db: PluginDatabase,
-  scopeId: string,
-  chatId: string,
-  actorWids: string[]
-): StoredGalleryUploadBatch | undefined {
-  for (const actorWid of uniqueWids(actorWids)) {
-    const batch = getActiveBatch(db, scopeId, chatId, actorWid);
-    if (batch) {
-      return batch;
-    }
+  const batch = active?.batch_id ? getBatch(db, scopeId, active.batch_id) : undefined;
+  if (batch && batch.actorIdentityId !== normalizedActorIdentityId) {
+    throw new GalleryStorageInvariantError(
+      `Active gallery upload ${batch.id} has a mismatched identity ownership claim.`
+    );
   }
-  return undefined;
+  return batch;
 }
 
-export function getActiveBatchForActorWidsAcrossScopes(
+export function getActiveBatchAcrossScopes(
   db: PluginDatabase,
   collectionChatId: string,
-  actorWids: string[]
+  actorIdentityId: string
 ): StoredGalleryUploadBatch | undefined {
   const normalizedChatId = normalizeCollectionChatId(collectionChatId);
-  const matches = new Map<string, { scopeId: string; batchId: string }>();
-  for (const actorWid of uniqueWids(actorWids)) {
-    const rows = db.all<{ scope_id: string; batch_id: string }>(
-      `SELECT scope_id, batch_id FROM gallery_active_batch_actors
-        WHERE collection_chat_id = ? AND actor_wid = ?`,
-      normalizedChatId,
-      actorWid
-    );
-    for (const row of rows) {
-      matches.set(`${row.scope_id}:${row.batch_id}`, {
-        scopeId: row.scope_id,
-        batchId: row.batch_id
-      });
-    }
-  }
-  if (matches.size > 1) {
+  const normalizedActorIdentityId = normalizeIdentityId(actorIdentityId);
+  const matches = db.all<{ scope_id: string; batch_id: string }>(
+    `SELECT scope_id, batch_id FROM gallery_active_batch_identities
+      WHERE collection_chat_id = ? AND actor_identity_id = ?`,
+    normalizedChatId,
+    normalizedActorIdentityId
+  );
+  if (matches.length > 1) {
     throw new GalleryStorageInvariantError(
       `Multiple active gallery uploads matched the collection inbox ${normalizedChatId}.`
     );
   }
-  const match = matches.values().next().value as { scopeId: string; batchId: string } | undefined;
-  return match ? getBatch(db, match.scopeId, match.batchId) : undefined;
+  const match = matches[0];
+  const batch = match ? getBatch(db, match.scope_id, match.batch_id) : undefined;
+  if (batch && batch.actorIdentityId !== normalizedActorIdentityId) {
+    throw new GalleryStorageInvariantError(
+      `Active gallery upload ${batch.id} has a mismatched identity ownership claim.`
+    );
+  }
+  return batch;
 }
 
 export function clearActiveBatch(db: PluginDatabase, batch: Pick<GalleryUploadBatch, 'id'>): number {
-  return db.run('DELETE FROM gallery_active_batch_actors WHERE batch_id = ?', batch.id).changes;
+  return db.run('DELETE FROM gallery_active_batch_identities WHERE batch_id = ?', batch.id).changes;
 }
 
 export type AppendBatchFileResult =
@@ -1361,45 +1339,31 @@ export function cancelBatch(db: PluginDatabase, input: {
 
 export function saveLinkRequest(db: PluginDatabase, request: GalleryLinkRequest): void {
   const tokenKey = normalizedToken(request.requestToken);
-  const aliases = uniqueWids([request.whatsappJid, ...(request.whatsappAliases ?? [])]);
-  const phoneDigits = digitsFromPhoneLike(request.phone ?? request.whatsappJid);
+  const identityId = normalizeIdentityId(request.identityId);
+  const whatsappJid = normalizeWid(request.whatsappJid);
   db.transaction(() => {
     db.run(
+      `DELETE FROM gallery_link_requests
+        WHERE token_key = ? OR identity_id = ? OR whatsapp_jid = ?`,
+      tokenKey,
+      identityId,
+      whatsappJid
+    );
+    db.run(
       `INSERT INTO gallery_link_requests (
-        token_key, request_token, request_id, phone, phone_digits, whatsapp_jid, site_label,
+        token_key, request_token, request_id, identity_id, whatsapp_jid, site_label,
         link_choice_count, created_at, expires_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(token_key) DO UPDATE SET
-        request_token = excluded.request_token,
-        request_id = excluded.request_id,
-        phone = excluded.phone,
-        phone_digits = excluded.phone_digits,
-        whatsapp_jid = excluded.whatsapp_jid,
-        site_label = excluded.site_label,
-        link_choice_count = excluded.link_choice_count,
-        created_at = excluded.created_at,
-        expires_at = excluded.expires_at`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       tokenKey,
       request.requestToken,
       request.requestId,
-      request.phone ?? null,
-      phoneDigits || null,
-      normalizeWid(request.whatsappJid),
+      identityId,
+      whatsappJid,
       request.siteLabel,
       request.linkChoiceCount,
       request.createdAt,
       request.expiresAt
     );
-    db.run('DELETE FROM gallery_link_request_aliases WHERE token_key = ?', tokenKey);
-    db.run('DELETE FROM gallery_link_request_scopes WHERE token_key = ?', tokenKey);
-    for (const wid of aliases) {
-      db.run(
-        `INSERT INTO gallery_link_request_aliases (wid, token_key) VALUES (?, ?)
-         ON CONFLICT(wid) DO UPDATE SET token_key = excluded.token_key`,
-        wid,
-        tokenKey
-      );
-    }
     request.scopeOptions.forEach((scope, position) => {
       db.run(
         `INSERT INTO gallery_link_request_scopes (token_key, position, scope_id, label)
@@ -1421,31 +1385,15 @@ export function getLinkRequest(db: PluginDatabase, requestToken: string): Galler
   return row ? linkRequestFromRow(db, row) : undefined;
 }
 
-export function getLinkRequestForWid(db: PluginDatabase, wid: string): GalleryLinkRequest | undefined {
-  const row = db.get<{ token_key: string }>(
-    'SELECT token_key FROM gallery_link_request_aliases WHERE wid = ?',
-    normalizeWid(wid)
+export function getLinkRequestForIdentity(
+  db: PluginDatabase,
+  identityId: string
+): GalleryLinkRequest | undefined {
+  const row = db.get<LinkRequestRow>(
+    'SELECT * FROM gallery_link_requests WHERE identity_id = ?',
+    normalizeIdentityId(identityId)
   );
-  return row?.token_key ? getLinkRequest(db, row.token_key) : undefined;
-}
-
-export function getLinkRequestForWids(db: PluginDatabase, wids: string[]): GalleryLinkRequest | undefined {
-  for (const wid of uniqueWids(wids)) {
-    const request = getLinkRequestForWid(db, wid);
-    if (request) return request;
-  }
-  return undefined;
-}
-
-export function getLinkRequestForPhoneDigits(db: PluginDatabase, phoneDigits: string): GalleryLinkRequest | undefined {
-  const normalized = digitsFromPhoneLike(phoneDigits);
-  if (!normalized) return undefined;
-  const row = db.get<{ token_key: string }>(
-    `SELECT token_key FROM gallery_link_requests
-      WHERE phone_digits = ? ORDER BY created_at DESC LIMIT 1`,
-    normalized
-  );
-  return row?.token_key ? getLinkRequest(db, row.token_key) : undefined;
+  return row ? linkRequestFromRow(db, row) : undefined;
 }
 
 export function deleteLinkRequest(db: PluginDatabase, requestToken: string): number {
@@ -1938,11 +1886,12 @@ export function completeAlbumAnnouncement(db: PluginDatabase, input: {
 export function saveRegistrationOtp(db: PluginDatabase, request: GalleryRegistrationOtpRequest): boolean {
   return db.run(
     `INSERT INTO gallery_registration_otps (
-      request_id, wid, display_name, otp_hash, expires_at, attempts, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      request_id, identity_id, whatsapp_jid, display_name, otp_hash, expires_at, attempts, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(request_id) DO NOTHING`,
     request.requestId,
-    normalizeWid(request.wid),
+    normalizeIdentityId(request.identityId),
+    normalizeWid(request.whatsappJid),
     request.displayName ?? null,
     request.otpHash,
     request.expiresAt,
@@ -2102,32 +2051,23 @@ export function importLegacyPiwigoGalleryRecords(
       });
     }
   }
-  reconstructImportedActiveBatches(db, importedAt);
   return result;
-}
-
-export function digitsFromPhoneLike(value: string): string {
-  const trimmed = value.trim().toLowerCase();
-  const cUsMatch = trimmed.match(/^(\d+)@c\.us$/);
-  if (cUsMatch?.[1]) return cUsMatch[1];
-  if (trimmed.includes('@')) return '';
-  return trimmed.replace(/\D/g, '');
 }
 
 function insertBatch(db: PluginDatabase, batch: GalleryUploadBatch): void {
   const deadlineGeneration = batch.deadlineGeneration ?? 1;
   const version = batch.version ?? 1;
-  const collectionChatId = normalizeCollectionChatId(batch.collectionChatId ?? batch.chatId);
+  const collectionChatId = normalizeCollectionChatId(batch.collectionChatId);
   db.run(
     `INSERT INTO gallery_upload_batches (
-      id, status, scope_id, group_id, group_wid, chat_id, collection_chat_id, actor_wid, actor_aliases_json,
+      id, status, scope_id, group_id, group_wid, chat_id, collection_chat_id, actor_wid,
       actor_identity_id, piwigo_linked_wid, actor_label, onde, quando, with_user_ids_json,
       source_kind, source_ref, source_snapshot_json,
       accepted_extensions_json, max_file_bytes, auto_finalize_minutes, created_at, updated_at,
       auto_finalize_at, last_accepted_at, deadline_generation, version,
       finalization_claim_id, finalization_claimed_at, finalization_claim_expires_at,
       album_label, error
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     batch.id,
     batch.status,
     batch.scopeId,
@@ -2136,8 +2076,7 @@ function insertBatch(db: PluginDatabase, batch: GalleryUploadBatch): void {
     normalizeWid(batch.chatId),
     collectionChatId,
     normalizeWid(batch.actorWid),
-    JSON.stringify(uniqueWids([batch.actorWid, ...(batch.actorAliases ?? [])])),
-    batch.actorIdentityId ?? null,
+    normalizeIdentityId(batch.actorIdentityId),
     batch.piwigoLinkedWid ? normalizeWid(batch.piwigoLinkedWid) : null,
     batch.actorLabel,
     batch.onde,
@@ -2207,8 +2146,7 @@ function draftFromRow(row: DraftRow): StoredGalleryUploadDraft {
     chatId: row.chat_id,
     collectionChatId: row.collection_chat_id,
     actorWid: row.actor_wid,
-    actorAliases: parseJsonArray(row.actor_aliases_json, z.string()),
-    ...(row.actor_identity_id ? { actorIdentityId: row.actor_identity_id } : {}),
+    actorIdentityId: normalizeIdentityId(row.actor_identity_id),
     ...(row.piwigo_linked_wid ? { piwigoLinkedWid: row.piwigo_linked_wid } : {}),
     actorLabel: row.actor_label,
     acceptedExtensions: parseJsonArray(row.accepted_extensions_json, z.string()),
@@ -2235,8 +2173,7 @@ function batchFromRow(db: PluginDatabase, row: BatchRow): StoredGalleryUploadBat
     chatId: row.chat_id,
     collectionChatId: row.collection_chat_id,
     actorWid: row.actor_wid,
-    actorAliases: parseJsonArray(row.actor_aliases_json, z.string()),
-    ...(row.actor_identity_id ? { actorIdentityId: row.actor_identity_id } : {}),
+    actorIdentityId: normalizeIdentityId(row.actor_identity_id),
     ...(row.piwigo_linked_wid ? { piwigoLinkedWid: row.piwigo_linked_wid } : {}),
     actorLabel: row.actor_label,
     onde: row.onde,
@@ -2313,16 +2250,11 @@ function linkRequestFromRow(db: PluginDatabase, row: LinkRequestRow): GalleryLin
       WHERE token_key = ? ORDER BY position`,
     row.token_key
   ).map((scope) => ({ scopeId: scope.scope_id, label: scope.label }));
-  const aliases = db.all<LinkRequestAliasRow>(
-    'SELECT wid FROM gallery_link_request_aliases WHERE token_key = ? ORDER BY wid',
-    row.token_key
-  ).map((alias) => alias.wid).filter((wid) => wid !== row.whatsapp_jid);
   return {
     requestId: row.request_id,
     requestToken: row.request_token,
-    ...(row.phone ? { phone: row.phone } : {}),
+    identityId: row.identity_id,
     whatsappJid: row.whatsapp_jid,
-    whatsappAliases: aliases,
     siteLabel: row.site_label,
     linkChoiceCount: row.link_choice_count,
     scopeOptions,
@@ -2384,7 +2316,8 @@ function registrationOtpFromRow(row: RegistrationOtpRow): GalleryRegistrationOtp
         : 'active';
   return {
     requestId: row.request_id,
-    wid: row.wid,
+    identityId: normalizeIdentityId(row.identity_id),
+    whatsappJid: normalizeWid(row.whatsapp_jid),
     ...(row.display_name ? { displayName: row.display_name } : {}),
     otpHash: row.otp_hash,
     status,
@@ -2464,26 +2397,28 @@ function normalizeCollectionChatId(chatId: string): string {
   return normalized;
 }
 
-function activeBatchActorClaim(
+function activeBatchIdentityClaim(
   db: PluginDatabase,
   scopeId: string,
   collectionChatId: string,
-  actorWid: string
+  actorIdentityId: string
 ): { scope_id: string; batch_id: string } | undefined {
-  if (collectionChatId.endsWith('@g.us')) {
+  const normalizedChatId = normalizeCollectionChatId(collectionChatId);
+  const normalizedIdentityId = normalizeIdentityId(actorIdentityId);
+  if (normalizedChatId.endsWith('@g.us')) {
     return db.get<{ scope_id: string; batch_id: string }>(
-      `SELECT scope_id, batch_id FROM gallery_active_batch_actors
-        WHERE scope_id = ? AND collection_chat_id = ? AND actor_wid = ?`,
+      `SELECT scope_id, batch_id FROM gallery_active_batch_identities
+        WHERE scope_id = ? AND collection_chat_id = ? AND actor_identity_id = ?`,
       scopeId,
-      collectionChatId,
-      actorWid
+      normalizedChatId,
+      normalizedIdentityId
     );
   }
   return db.get<{ scope_id: string; batch_id: string }>(
-    `SELECT scope_id, batch_id FROM gallery_active_batch_actors
-      WHERE collection_chat_id = ? AND actor_wid = ?`,
-    collectionChatId,
-    actorWid
+    `SELECT scope_id, batch_id FROM gallery_active_batch_identities
+      WHERE collection_chat_id = ? AND actor_identity_id = ?`,
+    normalizedChatId,
+    normalizedIdentityId
   );
 }
 
@@ -2498,8 +2433,8 @@ function normalizeAnnouncementGroupWid(groupWid: string): string {
 }
 
 function assertSameTarget(
-  existing: Pick<GalleryUploadDraft, 'scopeId' | 'groupId' | 'groupWid' | 'chatId' | 'collectionChatId' | 'actorWid' | 'actorIdentityId'>,
-  replacement: Pick<GalleryUploadDraft, 'scopeId' | 'groupId' | 'groupWid' | 'chatId' | 'collectionChatId' | 'actorWid' | 'actorIdentityId'>,
+  existing: Pick<GalleryUploadDraft, 'scopeId' | 'groupId' | 'groupWid' | 'chatId' | 'collectionChatId' | 'actorIdentityId'>,
+  replacement: Pick<GalleryUploadDraft, 'scopeId' | 'groupId' | 'groupWid' | 'chatId' | 'collectionChatId' | 'actorIdentityId'>,
   label: string
 ): void {
   if (
@@ -2507,9 +2442,8 @@ function assertSameTarget(
     existing.groupId !== replacement.groupId ||
     normalizeWid(existing.groupWid) !== normalizeWid(replacement.groupWid) ||
     normalizeWid(existing.chatId) !== normalizeWid(replacement.chatId) ||
-    normalizeCollectionChatId(existing.collectionChatId ?? existing.chatId) !==
-      normalizeCollectionChatId(replacement.collectionChatId ?? replacement.chatId) ||
-    normalizeWid(existing.actorWid) !== normalizeWid(replacement.actorWid) ||
+    normalizeCollectionChatId(existing.collectionChatId) !==
+      normalizeCollectionChatId(replacement.collectionChatId) ||
     existing.actorIdentityId !== replacement.actorIdentityId
   ) {
     throw new GalleryStorageInvariantError(`${label} target cannot be changed after capture.`);
@@ -2520,8 +2454,25 @@ function isTerminalBatchStatus(status: GalleryUploadBatchStatus): boolean {
   return status === 'completed' || status === 'cancelled' || status === 'expired' || status === 'failed';
 }
 
-function batchActorWids(batch: Pick<GalleryUploadBatch, 'actorWid' | 'actorAliases'>): string[] {
-  return uniqueWids([batch.actorWid, ...(batch.actorAliases ?? [])]);
+function requireActorIdentityId(
+  value: Pick<GalleryUploadDraft, 'actorIdentityId'>
+): string {
+  if (!value.actorIdentityId) {
+    throw new GalleryStorageInvariantError(
+      'Gallery upload ownership requires an authoritative actor identity ID.'
+    );
+  }
+  return normalizeIdentityId(value.actorIdentityId);
+}
+
+function normalizeIdentityId(identityId: string | null | undefined): string {
+  const normalized = identityId?.trim();
+  if (!normalized) {
+    throw new GalleryStorageInvariantError(
+      'Gallery upload ownership requires an authoritative actor identity ID.'
+    );
+  }
+  return normalized;
 }
 
 function normalizeWid(wid: string): string {
@@ -2554,81 +2505,6 @@ function safeHashEqual(expected: string, actual: string): boolean {
   return expectedBuffer.length === actualBuffer.length && timingSafeEqual(expectedBuffer, actualBuffer);
 }
 
-const legacyDraftSchema = z.object({
-  flowSessionId: z.string().min(1),
-  flowType: z.string().min(1),
-  scopeId: z.string().min(1),
-  groupId: z.string().min(1).optional(),
-  groupWid: z.string().min(1).optional(),
-  chatId: z.string().min(1),
-  collectionChatId: z.string().min(1).optional(),
-  actorWid: z.string().min(1),
-  actorAliases: z.array(z.string()).optional(),
-  actorIdentityId: z.string().min(1).optional(),
-  piwigoLinkedWid: z.string().min(1).optional(),
-  actorLabel: z.string(),
-  acceptedExtensions: z.array(z.string()),
-  maxFileBytes: z.number().int().positive(),
-  autoFinalizeMinutes: z.number().int().positive(),
-  createdAt: z.string().min(1)
-}).passthrough();
-
-const legacyBatchFileSchema = z.object({
-  mediaId: z.string().min(1),
-  messageId: z.string().min(1),
-  filename: z.string().min(1),
-  mimeType: z.string().min(1),
-  sizeBytes: z.number().int().nonnegative(),
-  status: z.enum(['staged', 'uploaded']),
-  acceptedAt: z.string().min(1).optional(),
-  imageId: z.number().int().optional(),
-  url: z.string().optional(),
-  uploadedAt: z.string().min(1).optional()
-}).passthrough();
-
-const legacyBatchSchema = z.object({
-  id: z.string().min(1),
-  status: z.enum(['collecting', 'uploading', 'finalizing', 'completed', 'cancelled', 'expired', 'failed']),
-  scopeId: z.string().min(1),
-  groupId: z.string().min(1).optional(),
-  groupWid: z.string().min(1).optional(),
-  chatId: z.string().min(1),
-  collectionChatId: z.string().min(1).optional(),
-  actorWid: z.string().min(1),
-  actorAliases: z.array(z.string()).optional(),
-  actorIdentityId: z.string().min(1).optional(),
-  piwigoLinkedWid: z.string().min(1).optional(),
-  actorLabel: z.string(),
-  onde: z.string(),
-  quando: z.string(),
-  withUserIds: z.array(z.number().int()),
-  acceptedExtensions: z.array(z.string()),
-  maxFileBytes: z.number().int().positive(),
-  autoFinalizeMinutes: z.number().int().positive(),
-  files: z.array(legacyBatchFileSchema),
-  createdAt: z.string().min(1),
-  updatedAt: z.string().min(1),
-  autoFinalizeAt: z.string().min(1),
-  lastAcceptedAt: z.string().min(1).optional(),
-  deadlineGeneration: z.number().int().positive().optional(),
-  version: z.number().int().positive().optional(),
-  albumLabel: z.string().optional(),
-  error: z.string().optional()
-}).passthrough();
-
-const legacyLinkRequestSchema = z.object({
-  requestId: z.string().min(1),
-  requestToken: z.string().min(1),
-  phone: z.string().optional(),
-  whatsappJid: z.string().min(1),
-  whatsappAliases: z.array(z.string()).optional(),
-  siteLabel: z.string(),
-  linkChoiceCount: z.number().int().nonnegative(),
-  scopeOptions: z.array(z.object({ scopeId: z.string().min(1), label: z.string() })),
-  createdAt: z.string().min(1),
-  expiresAt: z.string().min(1)
-}).passthrough();
-
 const legacyAnnouncementSchema = z.object({
   id: z.string().min(1),
   dedupeKey: z.string().min(1),
@@ -2649,77 +2525,24 @@ const legacyAnnouncementSchema = z.object({
   announcedAt: z.string().optional()
 }).passthrough();
 
-const legacyOtpSchema = z.object({
-  requestId: z.string().min(1),
-  wid: z.string().min(1),
-  displayName: z.string().optional(),
-  otpHash: z.string().min(1),
-  expiresAt: z.string().min(1),
-  attempts: z.number().int().nonnegative()
-}).passthrough();
-
 function importLegacyRecord(db: PluginDatabase, row: LegacyPluginDataRecord, importedAt: string): boolean {
-  if (row.key.startsWith('upload-draft:')) {
-    const parsed = legacyDraftSchema.safeParse(row.valueJson);
-    if (!parsed.success || !legacyScopeMatches(row, parsed.data.scopeId)) return false;
-    if (!getDraft(db, parsed.data.scopeId, parsed.data.flowSessionId)) {
-      const groupWid = parsed.data.groupWid ?? parsed.data.chatId;
-      saveDraft(db, {
-        ...parsed.data,
-        groupWid,
-        chatId: groupWid,
-        collectionChatId: parsed.data.collectionChatId ?? groupWid
-      });
-    }
+  if (
+    row.key.startsWith('upload-draft:')
+    || row.key.startsWith('upload-batch:')
+    || row.key.startsWith('active-upload:')
+  ) {
+    // Legacy upload ownership was keyed by mutable WhatsApp aliases, so it cannot
+    // be upgraded safely to a durable identity. Consume the record without
+    // recreating an active draft, batch, or ownership claim.
     return true;
   }
-  if (row.key.startsWith('upload-batch:')) {
-    const parsed = legacyBatchSchema.safeParse(row.valueJson);
-    if (!parsed.success || !legacyScopeMatches(row, parsed.data.scopeId)) return false;
-    if (!getBatch(db, parsed.data.scopeId, parsed.data.id)) {
-      const groupWid = parsed.data.groupWid ?? parsed.data.chatId;
-      assertExactTarget(groupWid, groupWid);
-      const status = parsed.data.status === 'uploading' ? 'finalizing' : parsed.data.status;
-      db.transaction(() => insertBatch(db, {
-        ...parsed.data,
-        status,
-        albumSource: { kind: 'manual' },
-        groupWid,
-        chatId: groupWid,
-        collectionChatId: parsed.data.collectionChatId ?? groupWid,
-        deadlineGeneration: parsed.data.deadlineGeneration ?? 1,
-        version: parsed.data.version ?? 1
-      }));
-    }
-    return true;
-  }
-  if (row.key.startsWith('active-upload:')) {
-    const scopeId = row.scopeId ?? undefined;
-    const value = z.object({ batchId: z.string().min(1) }).safeParse(row.valueJson);
-    if (!scopeId || !value.success) return false;
-    const batch = getBatch(db, scopeId, value.data.batchId);
-    if (!batch || isTerminalBatchStatus(batch.status)) return false;
-    const suffix = row.key.slice('active-upload:'.length);
-    const separator = suffix.lastIndexOf(':');
-    if (separator < 1) return false;
-    const chatId = suffix.slice(0, separator);
-    const actorWid = suffix.slice(separator + 1);
-    if (normalizeWid(chatId) !== normalizeWid(batch.collectionChatId)) return false;
-    db.run(
-      `INSERT OR IGNORE INTO gallery_active_batch_actors
-        (scope_id, collection_chat_id, actor_wid, batch_id, created_at) VALUES (?, ?, ?, ?, ?)`,
-      scopeId,
-      normalizeWid(chatId),
-      normalizeWid(actorWid),
-      batch.id,
-      batch.createdAt
-    );
-    return true;
-  }
-  if (row.key.startsWith('link-request:')) {
-    const parsed = legacyLinkRequestSchema.safeParse(row.valueJson);
-    if (!parsed.success) return false;
-    if (!getLinkRequest(db, parsed.data.requestToken)) saveLinkRequest(db, parsed.data);
+  if (
+    row.key.startsWith('link-request:')
+    || row.key.startsWith('link-request-wid:')
+    || row.key.startsWith('link-request-phone:')
+  ) {
+    // Legacy link requests do not contain a durable identity ID. Consume them
+    // without recreating authorization state keyed by mutable WhatsApp aliases.
     return true;
   }
   if (row.key.startsWith('album-announcement:') && !row.key.startsWith('album-announcement-dedupe:')) {
@@ -2729,16 +2552,9 @@ function importLegacyRecord(db: PluginDatabase, row: LegacyPluginDataRecord, imp
     return true;
   }
   if (row.key.startsWith('registration-otp:')) {
-    const parsed = legacyOtpSchema.safeParse(row.valueJson);
-    if (!parsed.success) return false;
-    if (!getRegistrationOtp(db, parsed.data.requestId)) {
-      saveRegistrationOtp(db, { ...parsed.data, createdAt: importedAt });
-    }
+    // Legacy OTP ownership was keyed by a mutable WhatsApp address. Consume
+    // the short-lived record without recreating authentication state.
     return true;
-  }
-  if (row.key.startsWith('link-request-wid:') || row.key.startsWith('link-request-phone:')) {
-    const index = z.object({ requestToken: z.string().min(1) }).safeParse(row.valueJson);
-    return index.success && Boolean(getLinkRequest(db, index.data.requestToken));
   }
   if (row.key.startsWith('album-announcement-dedupe:')) {
     const scopeId = row.scopeId ?? undefined;
@@ -2760,24 +2576,4 @@ function legacyImportPriority(key: string): number {
 
 function legacyScopeMatches(row: LegacyPluginDataRecord, valueScopeId: string): boolean {
   return row.scopeId === undefined || row.scopeId === null || row.scopeId === valueScopeId;
-}
-
-function reconstructImportedActiveBatches(db: PluginDatabase, createdAt: string): void {
-  const rows = db.all<BatchRow>(
-    `SELECT * FROM gallery_upload_batches WHERE status IN ('collecting', 'finalizing')`
-  );
-  for (const row of rows) {
-    const batch = batchFromRow(db, row);
-    for (const actorWid of batchActorWids(batch)) {
-      db.run(
-        `INSERT OR IGNORE INTO gallery_active_batch_actors
-          (scope_id, collection_chat_id, actor_wid, batch_id, created_at) VALUES (?, ?, ?, ?, ?)`,
-        batch.scopeId,
-        batch.collectionChatId,
-        actorWid,
-        batch.id,
-        createdAt
-      );
-    }
-  }
 }

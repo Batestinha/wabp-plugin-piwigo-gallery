@@ -19,41 +19,33 @@ const MANAGED_GROUP_SOURCE_KINDS = [
   KnownAccessSourceKind.MANAGED_GROUP_MEMBER
 ] as const;
 
-export async function assertPiwigoGalleryEligibleWid(
-  wid: string,
+export async function assertPiwigoGalleryEligibleIdentity(
+  identityId: string,
   db: PrismaClient = prisma,
   whatsAppAccountId: string = resolveWhatsAppAccountId(),
   runtimeBindingId: string = resolveRuntimeBindingId(undefined, whatsAppAccountId)
 ): Promise<void> {
-  if (await isPiwigoGalleryEligibleWid(wid, db, whatsAppAccountId, runtimeBindingId)) {
+  if (await isPiwigoGalleryEligibleIdentity(identityId, db, whatsAppAccountId, runtimeBindingId)) {
     return;
   }
   throw new Error('WhatsApp identity is not a member of a Piwigo-enabled group.');
 }
 
-export async function isPiwigoGalleryEligibleWid(
-  wid: string,
+export async function isPiwigoGalleryEligibleIdentity(
+  identityId: string,
   db: PrismaClient = prisma,
   whatsAppAccountId: string = resolveWhatsAppAccountId(),
   runtimeBindingId: string = resolveRuntimeBindingId(undefined, whatsAppAccountId)
 ): Promise<boolean> {
-  const identity = await db.waIdentity.findFirst({
-    where: {
-      OR: [
-        { wid },
-        { aliases: { some: { wid } } }
-      ]
-    },
-    select: { id: true }
-  });
-  if (!identity) {
+  const authoritativeIdentityId = identityId.trim();
+  if (!authoritativeIdentityId) {
     return false;
   }
 
   const records = await db.identityAccessRecord.findMany({
     where: {
       runtimeBindingId,
-      identityId: identity.id,
+      identityId: authoritativeIdentityId,
       active: true,
       sourceKind: { in: [...MANAGED_GROUP_SOURCE_KINDS] },
       group: {
@@ -104,7 +96,7 @@ export function linkChoiceCountForScopes(scopes: ConfiguredPiwigoGalleryScope[])
 }
 
 export async function listConfiguredPiwigoGalleryEligibleScopes(
-  wid: string,
+  identityId: string,
   input: {
     db?: PrismaClient | undefined;
     whatsAppAccountId?: string | undefined;
@@ -116,23 +108,15 @@ export async function listConfiguredPiwigoGalleryEligibleScopes(
   const db = input.db ?? prisma;
   const whatsAppAccountId = input.whatsAppAccountId ?? resolveWhatsAppAccountId();
   const runtimeBindingId = resolveRuntimeBindingId(input.runtimeBindingId, whatsAppAccountId);
-  const identity = await db.waIdentity.findFirst({
-    where: {
-      OR: [
-        { wid },
-        { aliases: { some: { wid } } }
-      ]
-    },
-    select: { id: true }
-  });
-  if (!identity) {
+  const authoritativeIdentityId = identityId.trim();
+  if (!authoritativeIdentityId) {
     return [];
   }
 
   const records = await db.identityAccessRecord.findMany({
     where: {
       runtimeBindingId,
-      identityId: identity.id,
+      identityId: authoritativeIdentityId,
       active: true,
       sourceKind: { in: [...MANAGED_GROUP_SOURCE_KINDS] },
       group: {

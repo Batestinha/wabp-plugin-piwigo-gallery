@@ -4,7 +4,6 @@ import type { TranslateFn } from '../../../platform/i18n';
 import { enqueuePluginJob } from '../../../platform/jobs/queue';
 import type { PluginExternalActionRegistration } from '../../../platform/pluginRuntime/pluginExternalActions';
 import type { PluginExternalActionRegistrationContext } from '../../../platform/pluginRuntime/types';
-import { identityAddressFromPhone } from '../../../platform/identity/identityAddressService';
 import { parsePiwigoGalleryConfig } from './config';
 import {
   linkChoiceCountForScopes,
@@ -55,9 +54,10 @@ const DEFAULT_AUTH_CODE_RATE_LIMITS: PiwigoGalleryRateLimitPolicy = {
 };
 
 const registrationOtpPayloadSchema = z.object({
-  version: z.literal(1),
+  version: z.literal(2),
   requestId: z.string(),
-  wid: z.string(),
+  identityId: z.string(),
+  whatsappJid: z.string(),
   displayName: z.string().optional(),
   otp: z.string().regex(/^\d{6}$/),
   createdAt: z.string().datetime(),
@@ -221,23 +221,24 @@ class PiwigoGalleryExternalActionRuntime {
     input: z.infer<typeof piwigoGalleryExternalActionSchemas.whatsappLinkRequestStart>,
     signal: AbortSignal
   ): Promise<z.infer<typeof outputSchemas.whatsappLinkRequestStart>> {
-    const wid = await resolveKnownWhatsAppRegistrationWid(input.phone, this.context.platform.contacts, signal);
-    const scopes = await this.eligibleScopesForWid(wid);
+    const identity = await resolvePiwigoExternalIdentity(
+      input.phone,
+      this.context.platform.contacts,
+      signal
+    );
+    const scopes = await this.eligibleScopesForIdentity(identity.identityId);
     throwIfAborted(signal);
     if (scopes.length === 0) {
       throw httpError(403, 'WhatsApp identity is not a member of a Piwigo-enabled group.');
     }
     const linkChoiceCount = linkChoiceCountForScopes(scopes);
-    const whatsappAliases = (await this.context.platform.contacts.resolveIdentityAddress(wid, signal)).aliases;
-    throwIfAborted(signal);
     const now = new Date();
     const database = await this.database();
     saveLinkRequest(database, {
       requestId: input.requestId,
       requestToken: input.requestToken.toUpperCase(),
-      phone: input.phone,
-      whatsappJid: wid,
-      whatsappAliases,
+      identityId: identity.identityId,
+      whatsappJid: identity.piwigoAccountWid,
       siteLabel: input.siteLabel,
       linkChoiceCount,
       scopeOptions: scopes.map((scope) => ({ scopeId: scope.scopeId, label: scope.label })),
@@ -245,9 +246,9 @@ class PiwigoGalleryExternalActionRuntime {
       expiresAt: new Date(now.getTime() + input.expiresInMinutes * 60_000).toISOString()
     });
     await this.context.platform.messaging.sendText(
-      wid,
+      identity.deliveryChatId,
       formatWhatsappLinkRequestMessage(
-        await this.piwigoTranslator(wid, scopes[0]?.scopeId),
+        await this.piwigoTranslator(identity.identityId, scopes[0]?.scopeId),
         input.username,
         input.siteLabel,
         linkChoiceCount
@@ -257,7 +258,7 @@ class PiwigoGalleryExternalActionRuntime {
     );
     return {
       requestId: input.requestId,
-      whatsappJid: wid,
+      whatsappJid: identity.piwigoAccountWid,
       expiresInMinutes: input.expiresInMinutes,
       eligibleScopeCount: scopes.length
     };
@@ -267,33 +268,38 @@ class PiwigoGalleryExternalActionRuntime {
     input: z.infer<typeof piwigoGalleryExternalActionSchemas.whatsappRegistrationOtpStart>,
     signal: AbortSignal
   ): Promise<z.infer<typeof outputSchemas.whatsappRegistrationOtpStart>> {
+    const identity = await resolvePiwigoExternalIdentity(
+      input.phone,
+      this.context.platform.contacts,
+      signal
+    );
     const database = await this.database();
-    const wid = await resolveKnownWhatsAppRegistrationWid(input.phone, this.context.platform.contacts, signal);
     const now = new Date();
     pruneExpiredRegistrationOtps(database, now.toISOString());
     const existingRequest = getRegistrationOtp(database, input.requestId);
     if (existingRequest) {
-      assertRegistrationOtpIdentity(existingRequest, wid, input.displayName);
+      assertRegistrationOtpIdentity(existingRequest, identity.identityId, input.displayName);
       assertRegistrationOtpActive(existingRequest.status);
       const existingPayload = await this.registrationOtpPayload(input.requestId);
       if (!existingPayload) {
         throw httpError(409, 'This registration request cannot be retried because its original OTP is unavailable.');
       }
-      assertRegistrationOtpPayload(existingPayload, input.requestId, wid, input.displayName);
+      assertRegistrationOtpPayload(existingPayload, input.requestId, identity.identityId, input.displayName);
       if (existingRequest.otpHash !== hashRegistrationOtp(input.requestId, existingPayload.otp)) {
         throw httpError(409, 'Registration request state conflicts with the original OTP.');
       }
       if (existingRequest.expiresAt <= now.toISOString()) {
         throw httpError(410, 'WhatsApp registration code expired.');
       }
-      await this.sendRegistrationOtp(existingPayload, signal);
+      await this.sendRegistrationOtp(existingPayload, identity, signal);
       return registrationOtpStartOutput(input.requestId);
     }
 
     const candidatePayload: RegistrationOtpPayload = {
-      version: 1,
+      version: 2,
       requestId: input.requestId,
-      wid,
+      identityId: identity.identityId,
+      whatsappJid: identity.piwigoAccountWid,
       ...(input.displayName ? { displayName: input.displayName } : {}),
       otp: String(randomInt(100000, 1000000)),
       createdAt: now.toISOString(),
@@ -309,7 +315,7 @@ class PiwigoGalleryExternalActionRuntime {
     if (!payload) {
       throw httpError(409, 'Registration request state expired; use a new requestId.');
     }
-    assertRegistrationOtpPayload(payload, input.requestId, wid, input.displayName);
+    assertRegistrationOtpPayload(payload, input.requestId, identity.identityId, input.displayName);
     if (payload.expiresAt <= new Date().toISOString()) {
       throw httpError(410, 'WhatsApp registration code expired.');
     }
@@ -321,7 +327,7 @@ class PiwigoGalleryExternalActionRuntime {
     await this.admitRateLimitedRequest({
       kind: 'registration-otp',
       idempotencyId: input.requestId,
-      wid,
+      identityId: identity.identityId,
       requestIp: input.requestIp,
       ttlSeconds: Math.max(
         Math.ceil(WHATSAPP_REGISTRATION_OTP_EXPIRY_MS / 1_000),
@@ -334,7 +340,7 @@ class PiwigoGalleryExternalActionRuntime {
 
     const preparedRequest = getRegistrationOtp(database, input.requestId);
     if (preparedRequest) {
-      assertRegistrationOtpIdentity(preparedRequest, wid, input.displayName);
+      assertRegistrationOtpIdentity(preparedRequest, identity.identityId, input.displayName);
       assertRegistrationOtpActive(preparedRequest.status);
       if (preparedRequest.otpHash !== hashRegistrationOtp(input.requestId, payload.otp)) {
         throw httpError(409, 'Registration request state conflicts with the original OTP.');
@@ -342,7 +348,8 @@ class PiwigoGalleryExternalActionRuntime {
     } else {
       saveRegistrationOtp(database, {
         requestId: input.requestId,
-        wid,
+        identityId: identity.identityId,
+        whatsappJid: payload.whatsappJid,
         ...(input.displayName ? { displayName: input.displayName } : {}),
         otpHash: hashRegistrationOtp(input.requestId, payload.otp),
         expiresAt: payload.expiresAt,
@@ -353,20 +360,24 @@ class PiwigoGalleryExternalActionRuntime {
       if (!persistedRequest) {
         throw new Error('Registration OTP was not persisted.');
       }
-      assertRegistrationOtpIdentity(persistedRequest, wid, input.displayName);
+      assertRegistrationOtpIdentity(persistedRequest, identity.identityId, input.displayName);
       assertRegistrationOtpActive(persistedRequest.status);
       if (persistedRequest.otpHash !== hashRegistrationOtp(input.requestId, payload.otp)) {
         throw httpError(409, 'Registration request state conflicts with the original OTP.');
       }
     }
-    await this.sendRegistrationOtp(payload, signal);
+    await this.sendRegistrationOtp(payload, identity, signal);
     return registrationOtpStartOutput(input.requestId);
   }
 
-  private async sendRegistrationOtp(payload: RegistrationOtpPayload, signal: AbortSignal): Promise<void> {
+  private async sendRegistrationOtp(
+    payload: RegistrationOtpPayload,
+    identity: PiwigoExternalIdentity,
+    signal: AbortSignal
+  ): Promise<void> {
     await this.context.platform.messaging.sendText(
-      payload.wid,
-      formatRegistrationOtpMessage(await this.piwigoTranslator(payload.wid), payload.otp),
+      identity.deliveryChatId,
+      formatRegistrationOtpMessage(await this.piwigoTranslator(identity.identityId), payload.otp),
       { idempotencyKey: `piwigo-gallery:registration-otp:${payload.requestId}` },
       signal
     );
@@ -399,7 +410,7 @@ class PiwigoGalleryExternalActionRuntime {
       throw httpError(401, 'Invalid WhatsApp registration code.');
     }
     return {
-      whatsappJid: result.request.wid,
+      whatsappJid: result.request.whatsappJid,
       ...(result.request.displayName ? { displayName: result.request.displayName } : {})
     };
   }
@@ -408,23 +419,28 @@ class PiwigoGalleryExternalActionRuntime {
     input: z.infer<typeof piwigoGalleryExternalActionSchemas.authCodeSend>,
     signal: AbortSignal
   ): Promise<z.infer<typeof outputSchemas.authCodeSend>> {
-    const whatsappJid = input.whatsappJid.toLowerCase();
+    const identity = await resolvePiwigoExternalIdentity(
+      input.whatsappJid,
+      this.context.platform.contacts,
+      signal
+    );
+    const whatsappJid = identity.piwigoAccountWid;
     const idempotencyDigest = createHash('sha256')
-      .update(JSON.stringify([whatsappJid, input.scopeId, input.purpose, input.code]))
+      .update(JSON.stringify([identity.identityId, input.scopeId, input.purpose, input.code]))
       .digest('hex');
     const authCodeRateLimits = rateLimitPolicy(DEFAULT_AUTH_CODE_RATE_LIMITS, this.dependencies.authCodeRateLimits);
     await this.admitRateLimitedRequest({
       kind: 'auth-code',
       idempotencyId: idempotencyDigest,
-      wid: whatsappJid,
+      identityId: identity.identityId,
       requestIp: input.ip,
       ttlSeconds: Math.max(input.expiresInMinutes * 60, authCodeRateLimits.windowSeconds),
       policy: authCodeRateLimits,
       signal
     });
     await this.context.platform.messaging.sendText(
-      whatsappJid,
-      formatPiwigoAuthCodeMessage(await this.piwigoTranslator(whatsappJid, input.scopeId), {
+      identity.deliveryChatId,
+      formatPiwigoAuthCodeMessage(await this.piwigoTranslator(identity.identityId, input.scopeId), {
         ...input,
         whatsappJid
       }),
@@ -440,15 +456,15 @@ class PiwigoGalleryExternalActionRuntime {
     input: z.infer<typeof piwigoGalleryExternalActionSchemas.eligibleScopesResolve>,
     signal: AbortSignal
   ): Promise<z.infer<typeof outputSchemas.eligibleScopesResolve>> {
-    const wid = input.whatsappJid ?? await resolveKnownWhatsAppRegistrationWid(
-      input.phone!,
+    const identity = await resolvePiwigoExternalIdentity(
+      input.whatsappJid ?? input.phone!,
       this.context.platform.contacts,
       signal
     );
-    const scopes = await this.eligibleScopesForWid(wid);
+    const scopes = await this.eligibleScopesForIdentity(identity.identityId);
     throwIfAborted(signal);
     return {
-      whatsappJid: wid,
+      whatsappJid: identity.piwigoAccountWid,
       scopes: scopes.map((scope) => ({ scopeId: scope.scopeId, label: scope.label }))
     };
   }
@@ -554,8 +570,8 @@ class PiwigoGalleryExternalActionRuntime {
     return { accepted: true, duplicate: false, announcementId, announceAt: observedDeadline };
   }
 
-  private eligibleScopesForWid(wid: string) {
-    return (this.dependencies.listEligibleScopes ?? listConfiguredPiwigoGalleryEligibleScopes)(wid, {
+  private eligibleScopesForIdentity(identityId: string) {
+    return (this.dependencies.listEligibleScopes ?? listConfiguredPiwigoGalleryEligibleScopes)(identityId, {
       whatsAppAccountId: this.context.whatsAppAccountId,
       runtimeBindingId: this.context.runtimeBindingId,
       defaultPiwigoBaseUrl: this.context.config.PIWIGO_GALLERY_DEFAULT_BASE_URL,
@@ -582,7 +598,7 @@ class PiwigoGalleryExternalActionRuntime {
   private async admitRateLimitedRequest(input: {
     kind: 'registration-otp' | 'auth-code';
     idempotencyId: string;
-    wid: string;
+    identityId: string;
     requestIp?: string | undefined;
     ttlSeconds: number;
     policy: PiwigoGalleryRateLimitPolicy;
@@ -598,7 +614,7 @@ class PiwigoGalleryExternalActionRuntime {
       dimensions: rateLimitDimensions({
         accountId,
         kind: input.kind,
-        wid: input.wid,
+        identityId: input.identityId,
         requestIp: input.requestIp,
         policy: input.policy
       })
@@ -612,8 +628,8 @@ class PiwigoGalleryExternalActionRuntime {
     return coveredGroups?.some((group) => group.groupWid.toLowerCase() === groupWid.toLowerCase()) ?? false;
   }
 
-  private async piwigoTranslator(wid: string, scopeId?: string | undefined): Promise<TranslateFn> {
-    return this.context.i18n.translatorForIdentity(wid, scopeId).catch(() => defaultPiwigoGalleryTranslator);
+  private async piwigoTranslator(identityId: string, scopeId?: string | undefined): Promise<TranslateFn> {
+    return this.context.i18n.translatorForIdentity(identityId, scopeId).catch(() => defaultPiwigoGalleryTranslator);
   }
 }
 
@@ -633,12 +649,12 @@ function registrationOtpPayloadKey(accountId: string, requestId: string): string
 function assertRegistrationOtpPayload(
   payload: RegistrationOtpPayload,
   requestId: string,
-  wid: string,
+  identityId: string,
   displayName?: string | undefined
 ): void {
   if (
     payload.requestId !== requestId ||
-    payload.wid !== wid ||
+    payload.identityId !== identityId ||
     (payload.displayName ?? undefined) !== (displayName ?? undefined)
   ) {
     throw httpError(409, 'requestId is already bound to a different WhatsApp identity or display name.');
@@ -646,11 +662,11 @@ function assertRegistrationOtpPayload(
 }
 
 function assertRegistrationOtpIdentity(
-  request: { wid: string; displayName?: string | undefined },
-  wid: string,
+  request: { identityId: string; displayName?: string | undefined },
+  identityId: string,
   displayName?: string | undefined
 ): void {
-  if (request.wid !== wid || (request.displayName ?? undefined) !== (displayName ?? undefined)) {
+  if (request.identityId !== identityId || (request.displayName ?? undefined) !== (displayName ?? undefined)) {
     throw httpError(409, 'requestId is already bound to a different WhatsApp identity or display name.');
   }
 }
@@ -685,14 +701,14 @@ function rateAdmissionKey(
 function rateLimitDimensions(input: {
   accountId: string;
   kind: 'registration-otp' | 'auth-code';
-  wid: string;
+  identityId: string;
   requestIp?: string | undefined;
   policy: PiwigoGalleryRateLimitPolicy;
 }): Array<{ key: string; limit: number }> {
   const prefix = `${input.kind}:rate`;
   const dimensions = [
     {
-      key: `${prefix}:wid:${opaqueKey(input.accountId, input.wid.toLowerCase())}`,
+      key: `${prefix}:identity:${opaqueKey(input.accountId, input.identityId)}`,
       limit: input.policy.perWid
     },
     {
@@ -809,43 +825,48 @@ function formatPiwigoAuthCodeMessage(
   return lines.join('\n');
 }
 
-async function resolveKnownWhatsAppRegistrationWid(
-  phone: string,
+interface PiwigoExternalIdentity {
+  identityId: string;
+  canonicalWid: string;
+  piwigoAccountWid: string;
+  deliveryChatId: string;
+}
+
+async function resolvePiwigoExternalIdentity(
+  reference: string,
   contacts: PluginExternalActionRegistrationContext['platform']['contacts'],
   signal: AbortSignal
-): Promise<string> {
+): Promise<PiwigoExternalIdentity> {
   throwIfAborted(signal);
-  const candidateWid = normalizeRegistrationPhoneWid(phone);
-  const identity = await contacts.resolveIdentityAddress(candidateWid, signal);
-  const authoritativeWids = [...new Set([
-    identity.deliveryChatId,
-    identity.canonicalWid,
-    identity.addressBookWid,
-    identity.lidWid,
-    identity.phoneWid,
-    ...identity.aliases
-  ].filter((wid): wid is string => Boolean(wid)))];
-  for (const alias of authoritativeWids) {
-    if (alias && await contacts.isKnownContact(alias, signal)) return alias;
+  const normalizedReference = reference.trim().toLowerCase();
+  if (!normalizedReference) {
+    throw httpError(400, 'Invalid WhatsApp identity reference.');
   }
-  const knownContacts = await contacts.getKnownContacts(signal);
-  const contact = knownContacts.find((row) => authoritativeWids.includes(row.wid));
-  if (contact) return contact.wid;
-  throw httpError(404, 'WhatsApp identity is not a known bot contact.');
+  const identity = await contacts.resolveIdentityReference(normalizedReference, signal).catch((error) => {
+    if (error instanceof Error && error.message === 'A valid WhatsApp identity reference is required.') {
+      throw httpError(400, 'Invalid WhatsApp phone number.');
+    }
+    throw error;
+  });
+  throwIfAborted(signal);
+  const identityId = identity.identityId?.trim() ?? '';
+  const canonicalWid = identity.canonicalWid.trim();
+  const piwigoAccountWid = identity.addressBookWid.trim();
+  const deliveryChatId = identity.deliveryChatId.trim();
+  if (!identityId || !canonicalWid || !piwigoAccountWid || !deliveryChatId) {
+    throw httpError(404, 'WhatsApp identity is not known to the bot.');
+  }
+  if (!await contacts.isKnownContact(piwigoAccountWid, signal)) {
+    throw httpError(404, 'WhatsApp identity is not known to the bot.');
+  }
+  throwIfAborted(signal);
+  return { identityId, canonicalWid, piwigoAccountWid, deliveryChatId };
 }
 
 function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) {
     throw signal.reason instanceof Error ? signal.reason : new Error('Piwigo external action was aborted.');
   }
-}
-
-function normalizeRegistrationPhoneWid(phone: string): string {
-  const trimmed = phone.trim().toLowerCase();
-  if (/^\d{7,15}@c\.us$/.test(trimmed)) return trimmed;
-  const digits = trimmed.replace(/\D/g, '');
-  if (!/^\d{7,15}$/.test(digits)) throw httpError(400, 'Invalid WhatsApp phone number.');
-  return identityAddressFromPhone(digits)!;
 }
 
 function hashRegistrationOtp(requestId: string, otp: string): string {

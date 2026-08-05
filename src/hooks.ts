@@ -36,8 +36,8 @@ import {
   completeBatchFinalization,
   completeBatchTerminalNotification,
   getAlbumAnnouncement,
-  getActiveBatchForActorWids,
-  getActiveBatchForActorWidsAcrossScopes,
+  getActiveBatch,
+  getActiveBatchAcrossScopes,
   getBatch,
   markBatchFileFailed,
   markBatchFileUploaded,
@@ -59,6 +59,7 @@ import {
   reconcileGalleryUploadDrafts
 } from './storageRuntime';
 import { PIWIGO_GALLERY_UPLOAD_FLOW_TYPE } from './flow';
+import { resolveGalleryUploadWhatsappJid } from './identityRouting';
 
 const MEDIA_DUMP_REMINDER_COOLDOWN_SECONDS = 15 * 60;
 const MEDIA_DUMP_ALBUM_REPLY_DELAY_MS = 5_000;
@@ -74,8 +75,7 @@ const ANNOUNCEMENT_DOWNLOAD_RETRY_MAX_MS = 5 * 60_000;
 interface MediaDumpHintPayload {
   chatId: string;
   messageId: string;
-  actorWid: string;
-  actorAliases: string[];
+  actorIdentityId: string;
 }
 
 export function createPiwigoGalleryHooks(context: PluginRuntimeContext): PluginRuntimeHooks {
@@ -115,11 +115,15 @@ export function createPiwigoGalleryHooks(context: PluginRuntimeContext): PluginR
   });
   return {
     async resolvePrivateMessageRoute(event) {
+      const actorIdentityId = event.actorIdentityId.trim();
+      if (!actorIdentityId) {
+        return;
+      }
       const database = await databasePreparation;
-      const batch = getActiveBatchForActorWidsAcrossScopes(
+      const batch = getActiveBatchAcrossScopes(
         database,
         event.chatId,
-        [event.actorWid, ...(event.actorAliases ?? [])]
+        actorIdentityId
       );
       if (
         !batch
@@ -175,7 +179,12 @@ async function handleMessage(
   if (event.message.fromMe) {
     return;
   }
-  const config = parsePiwigoGalleryConfig(await context.configFor(event.scopeId, event.actorWid));
+  const actorIdentityId = event.actorIdentityId.trim();
+  const actorWid = event.actorWid.trim();
+  if (!actorIdentityId || !actorWid) {
+    return;
+  }
+  const config = parsePiwigoGalleryConfig(await context.configFor(event.scopeId, actorIdentityId));
   if (!config.enabled || event.isCommandLike) {
     return;
   }
@@ -183,27 +192,27 @@ async function handleMessage(
   if (messageType === 'album') {
     if (!await actorCanUpload(context, {
       scopeId: event.scopeId,
-      actorWid: event.actorWid,
+      actorIdentityId,
       groupId: event.groupId,
       groupWid: event.groupWid ?? event.message.chatId,
       allowScopeMemberUploads: config.access.allowScopeMemberUploads
     })) {
       return;
     }
-    return [enqueueMediaDumpHint(event)];
+    return [enqueueMediaDumpHint(event, actorIdentityId)];
   }
   if (!event.message.hasMedia) {
     return;
   }
   const db = await preparedGalleryDatabase(context.dataStore, context.databases);
-  const batch = getActiveBatchForActorWids(db, event.scopeId, event.message.chatId, eventActorWids(event));
+  const batch = getActiveBatch(db, event.scopeId, event.message.chatId, actorIdentityId);
   const activeUpload = batch?.status === 'collecting';
   if (
     activeUpload
     && event.message.context === 'private'
     && !await actorCanUpload(context, {
       scopeId: batch.scopeId,
-      actorWid: event.actorWid,
+      actorIdentityId,
       groupId: batch.groupId,
       groupWid: batch.groupWid,
       allowScopeMemberUploads: config.access.allowScopeMemberUploads
@@ -222,7 +231,7 @@ async function handleMessage(
   }
   if (!context.mediaStore) {
     return [await reply(context, event, 'official.piwigo-gallery.failed', {
-      reason: await t(context, event.scopeId, event.actorWid, 'official.piwigo-gallery.error.mediaRuntimeUnavailable')
+        reason: await t(context, event.scopeId, event.actorIdentityId, 'official.piwigo-gallery.error.mediaRuntimeUnavailable')
     })];
   }
 
@@ -263,7 +272,7 @@ async function handleMessage(
       type: 'message.sendText',
       chatId: event.message.chatId,
       quotedMessageId: event.message.id,
-      text: await t(context, event.scopeId, event.actorWid, 'official.piwigo-gallery.documentStaged', {
+      text: await t(context, event.scopeId, event.actorIdentityId, 'official.piwigo-gallery.documentStaged', {
         count: String(append.fileCount),
         minutes: String(batch.autoFinalizeMinutes)
       })
@@ -280,7 +289,10 @@ async function handleMessage(
   ];
 }
 
-function enqueueMediaDumpHint(event: PluginMessageEvent): PluginAction {
+function enqueueMediaDumpHint(
+  event: PluginMessageEvent,
+  actorIdentityId: string
+): PluginAction {
   return {
     type: 'plugin.enqueueJob',
     pluginId: PIWIGO_GALLERY_PLUGIN_ID,
@@ -290,10 +302,9 @@ function enqueueMediaDumpHint(event: PluginMessageEvent): PluginAction {
     payload: {
       chatId: event.message.chatId,
       messageId: event.message.id,
-      actorWid: event.actorWid,
-      actorAliases: event.actorAliases ?? []
+      actorIdentityId
     },
-    dedupeKey: `${PIWIGO_GALLERY_MEDIA_DUMP_HINT_JOB}:${event.scopeId}:${event.message.chatId}:${event.message.id}`
+    dedupeKey: `${PIWIGO_GALLERY_MEDIA_DUMP_HINT_JOB}:${event.scopeId}:${event.message.chatId}:${actorIdentityId}:${event.message.id}`
   };
 }
 
@@ -305,19 +316,19 @@ async function sendMediaDumpHint(
   if (!payload) {
     return [{ type: 'audit.record', action: 'piwigo-gallery.media-dump-hint.skipped', metadataJson: { reason: 'invalid payload' } }];
   }
-  const config = parsePiwigoGalleryConfig(await context.configFor(job.scopeId, payload.actorWid));
+  const config = parsePiwigoGalleryConfig(await context.configFor(job.scopeId, payload.actorIdentityId));
   if (!config.enabled) {
     return;
   }
   if (!await actorCanUpload(context, {
     scopeId: job.scopeId,
-    actorWid: payload.actorWid,
+    actorIdentityId: payload.actorIdentityId,
     groupWid: payload.chatId,
     allowScopeMemberUploads: config.access.allowScopeMemberUploads
   })) {
     return;
   }
-  const key = mediaDumpReminderKey(job.scopeId, payload.chatId, mediaDumpPayloadActorWids(payload), payload.actorWid);
+  const key = mediaDumpReminderKey(job.scopeId, payload.chatId, payload.actorIdentityId);
   if (await context.ephemeralStore.get(key)) {
     return;
   }
@@ -331,7 +342,7 @@ async function sendMediaDumpHint(
     quotedMessageId: payload.messageId,
     text: config.mediaDumpDocumentsHint.trim()
       ? config.mediaDumpDocumentsHint.trim()
-      : await t(context, job.scopeId, payload.actorWid, 'official.piwigo-gallery.mediaDumpDocumentsHint')
+      : await t(context, job.scopeId, payload.actorIdentityId, 'official.piwigo-gallery.mediaDumpDocumentsHint')
   }];
 }
 
@@ -339,7 +350,7 @@ async function actorCanUpload(
   context: PluginRuntimeContext,
   input: {
     scopeId: string;
-    actorWid: string;
+    actorIdentityId: string;
     groupId?: string | undefined;
     groupWid?: string | undefined;
     allowScopeMemberUploads: boolean;
@@ -349,13 +360,14 @@ async function actorCanUpload(
     return true;
   }
   const decision = await context.explainPermission?.({
-    actorWid: input.actorWid,
+    actorIdentityId: input.actorIdentityId,
     action: PIWIGO_GALLERY_PERMISSIONS.upload,
     scopeId: input.scopeId,
     pluginId: PIWIGO_GALLERY_PLUGIN_ID,
     ...(input.groupId ? { groupId: input.groupId } : {}),
     ...(input.groupWid ? { groupWid: input.groupWid } : {}),
     requiresCurrentManagedGroupMembership: true,
+    currentManagedGroupMembershipMode: 'effective_scope',
     ...(input.allowScopeMemberUploads ? { allowCurrentManagedGroupMember: true } : {})
   });
   return decision?.allowed === true;
@@ -506,7 +518,7 @@ async function finalizeBatch(
   }
   await enqueueBatchClaimRecovery(context, job, batch);
 
-  const config = parsePiwigoGalleryConfig(await context.configFor(batch.scopeId, batch.actorWid));
+  const config = parsePiwigoGalleryConfig(await context.configFor(batch.scopeId, batch.actorIdentityId));
   const connection = await resolveGalleryConnection(
     context.dataStore,
     config,
@@ -519,7 +531,7 @@ async function finalizeBatch(
       db,
       batch,
       claimId,
-      await t(context, batch.scopeId, batch.actorWid, 'official.piwigo-gallery.error.connectionNotConfigured')
+      await t(context, batch.scopeId, batch.actorIdentityId, 'official.piwigo-gallery.error.connectionNotConfigured')
     );
   }
   if (!context.mediaStore) {
@@ -528,11 +540,24 @@ async function finalizeBatch(
       db,
       batch,
       claimId,
-      await t(context, batch.scopeId, batch.actorWid, 'official.piwigo-gallery.error.mediaRuntimeUnavailable')
+      await t(context, batch.scopeId, batch.actorIdentityId, 'official.piwigo-gallery.error.mediaRuntimeUnavailable')
     );
   }
 
   const client = new PiwigoGalleryClient(connection);
+  let uploadWhatsappJid: string;
+  try {
+    uploadWhatsappJid = await resolveGalleryUploadWhatsappJid(context, batch);
+  } catch (error) {
+    return failBatch(
+      context,
+      db,
+      batch,
+      claimId,
+      await t(context, batch.scopeId, batch.actorIdentityId, 'official.piwigo-gallery.error.identityMismatch'),
+      errorMessage(error)
+    );
+  }
   let uploadIdempotencySupported: boolean | undefined;
   let eventAlbumSourceSupported: boolean | undefined;
   for (const file of batch.files) {
@@ -577,7 +602,7 @@ async function finalizeBatch(
         db,
         batch,
         claimId,
-        await t(context, batch.scopeId, batch.actorWid, 'official.piwigo-gallery.error.stagedFileMissing', {
+        await t(context, batch.scopeId, batch.actorIdentityId, 'official.piwigo-gallery.error.stagedFileMissing', {
           filename: activeFile.filename
         })
       );
@@ -604,7 +629,7 @@ async function finalizeBatch(
         db,
         batch,
         claimId,
-        await t(context, batch.scopeId, batch.actorWid, 'official.piwigo-gallery.error.serviceUnavailable'),
+        await t(context, batch.scopeId, batch.actorIdentityId, 'official.piwigo-gallery.error.serviceUnavailable'),
         `Uploading file ${activeFile.filename} has no durable attempt ID.`
       );
     }
@@ -622,7 +647,7 @@ async function finalizeBatch(
           db,
           batch,
           claimId,
-          await t(context, batch.scopeId, batch.actorWid, userFacingPiwigoErrorKey(error)),
+          await t(context, batch.scopeId, batch.actorIdentityId, userFacingPiwigoErrorKey(error)),
           errorMessage(error)
         );
       }
@@ -636,7 +661,7 @@ async function finalizeBatch(
         await t(
           context,
           batch.scopeId,
-          batch.actorWid,
+          batch.actorIdentityId,
           'official.piwigo-gallery.error.uploadIdempotencyUnsupported'
         ),
         'Piwigo did not advertise upload idempotency; upload was not attempted.'
@@ -651,7 +676,7 @@ async function finalizeBatch(
         await t(
           context,
           batch.scopeId,
-          batch.actorWid,
+          batch.actorIdentityId,
           'official.piwigo-gallery.error.eventAlbumSourceUnsupported'
         ),
         'Piwigo did not advertise event album source support; upload was not attempted.'
@@ -661,7 +686,7 @@ async function finalizeBatch(
       const result = await withBatchLeaseHeartbeat(db, batch, claimId, () =>
         client.uploadForJid({
           idempotencyKey: attemptId,
-          whatsappJid: batch.piwigoLinkedWid ?? batch.actorWid,
+          whatsappJid: uploadWhatsappJid,
           scopeId: batch.scopeId,
           onde: batch.onde,
           quando: batch.quando,
@@ -723,15 +748,15 @@ async function completeBatchUploadResults(
   const empty = batch.files.length === 0;
   const status = empty ? 'expired' : failed.length > 0 ? 'failed' : 'completed';
   const notificationText = empty
-    ? await t(context, batch.scopeId, batch.actorWid, 'official.piwigo-gallery.expiredEmpty')
+    ? await t(context, batch.scopeId, batch.actorIdentityId, 'official.piwigo-gallery.expiredEmpty')
     : failed.length > 0
-      ? await t(context, batch.scopeId, batch.actorWid, 'official.piwigo-gallery.completedWithFailures', {
+      ? await t(context, batch.scopeId, batch.actorIdentityId, 'official.piwigo-gallery.completedWithFailures', {
           uploaded: String(uploaded.length),
           total: String(batch.files.length),
           failed: String(failed.length),
           failedFiles: failed.map((file) => file.filename).join(', ')
         })
-      : await t(context, batch.scopeId, batch.actorWid, 'official.piwigo-gallery.completed', {
+      : await t(context, batch.scopeId, batch.actorIdentityId, 'official.piwigo-gallery.completed', {
           uploaded: String(uploaded.length),
           album: batch.albumLabel ?? ''
         });
@@ -790,7 +815,7 @@ async function deferAmbiguousBatchUpload(
       db,
       batch,
       claimId,
-      await t(context, batch.scopeId, batch.actorWid, 'official.piwigo-gallery.error.serviceUnavailable'),
+      await t(context, batch.scopeId, batch.actorIdentityId, 'official.piwigo-gallery.error.serviceUnavailable'),
       `Uploading file ${file.filename} has no durable attempt ID.`
     );
   }
@@ -822,7 +847,7 @@ async function deferAmbiguousBatchUpload(
       await t(
         context,
         batch.scopeId,
-        batch.actorWid,
+        batch.actorIdentityId,
         'official.piwigo-gallery.error.uploadRetriesExhausted'
       ),
       `Piwigo upload ${attemptId} remained ambiguous after ${attemptNumber} attempts: ${errorMessage(error)}`
@@ -920,7 +945,7 @@ async function failBatch(
   const notificationText = await t(
     context,
     batch.scopeId,
-    batch.actorWid,
+    batch.actorIdentityId,
     'official.piwigo-gallery.failed',
     { reason: userReason }
   );
@@ -1060,10 +1085,10 @@ function dispatchBatchTerminalNotification(
   return [
     {
       type: 'message.sendText',
-      chatId: started.batch.collectionChatId ?? started.batch.chatId,
+      chatId: started.batch.collectionChatId,
       text: started.notification.text,
       idempotencyKey: started.notification.deliveryKey,
-      requiredRemoteChatId: started.batch.collectionChatId ?? started.batch.chatId,
+      requiredRemoteChatId: started.batch.collectionChatId,
       abortBatchOnFailure: true
     },
     {
@@ -1659,10 +1684,6 @@ function hasDownloadReference(file: PiwigoAlbumAnnouncementFile): boolean {
   return file.imageId !== undefined || Boolean(file.fileId || file.downloadToken);
 }
 
-function eventActorWids(event: PluginMessageEvent): string[] {
-  return uniqueWids([event.actorWid, event.message.senderWid, event.message.authorWid, ...(event.actorAliases ?? [])]);
-}
-
 function normalizedMessageType(type: string | undefined): string {
   return (type ?? 'unknown').trim().toLowerCase();
 }
@@ -1672,34 +1693,28 @@ function mediaDumpHintPayloadFromJob(payload: unknown): MediaDumpHintPayload | u
     return undefined;
   }
   const value = payload as Record<string, unknown>;
-  if (typeof value.chatId !== 'string' || typeof value.messageId !== 'string' || typeof value.actorWid !== 'string') {
+  if (
+    typeof value.chatId !== 'string'
+    || typeof value.messageId !== 'string'
+    || typeof value.actorIdentityId !== 'string'
+  ) {
     return undefined;
   }
-  const actorAliases = Array.isArray(value.actorAliases)
-    ? value.actorAliases.filter((alias): alias is string => typeof alias === 'string')
-    : [];
+  const chatId = value.chatId.trim();
+  const messageId = value.messageId.trim();
+  const actorIdentityId = value.actorIdentityId.trim();
+  if (!chatId || !messageId || !actorIdentityId) {
+    return undefined;
+  }
   return {
-    chatId: value.chatId,
-    messageId: value.messageId,
-    actorWid: value.actorWid,
-    actorAliases
+    chatId,
+    messageId,
+    actorIdentityId
   };
 }
 
-function mediaDumpPayloadActorWids(payload: MediaDumpHintPayload): string[] {
-  return uniqueWids([payload.actorWid, ...payload.actorAliases]);
-}
-
-function mediaDumpReminderKey(scopeId: string, chatId: string, actorWids: string[], actorWid: string): string {
-  return `media-dump-reminder:${scopeId}:${chatId}:${mediaDumpActorKey(actorWids, actorWid)}`;
-}
-
-function mediaDumpActorKey(actorWids: string[], actorWid: string): string {
-  return actorWids[0] ?? actorWid.trim().toLowerCase();
-}
-
-function uniqueWids(wids: Array<string | null | undefined>): string[] {
-  return [...new Set(wids.map((wid) => wid?.trim().toLowerCase() ?? '').filter(Boolean))];
+function mediaDumpReminderKey(scopeId: string, chatId: string, actorIdentityId: string): string {
+  return `media-dump-reminder:${scopeId}:${chatId}:${actorIdentityId}`;
 }
 
 function batchIdFromPayload(payload: unknown): string | undefined {
@@ -1805,18 +1820,18 @@ async function reply(
     type: 'message.sendText',
     chatId: event.message.chatId,
     quotedMessageId: event.message.id,
-    text: await t(context, event.scopeId, event.actorWid, key, params)
+    text: await t(context, event.scopeId, event.actorIdentityId, key, params)
   };
 }
 
 async function t(
   context: PluginRuntimeContext,
   scopeId: string,
-  actorWid: string,
+  actorIdentityId: string,
   key: string,
   params: Record<string, string> = {}
 ): Promise<string> {
-  const translator = await context.i18n.translatorForIdentity(actorWid, scopeId);
+  const translator = await context.i18n.translatorForIdentity(actorIdentityId, scopeId);
   return translator(key, params);
 }
 

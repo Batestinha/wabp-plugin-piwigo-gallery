@@ -33,7 +33,7 @@ export const piwigoGalleryDatabases = [{
 export const piwigoGalleryManifest: PluginManifest = {
   pluginId: PIWIGO_GALLERY_PLUGIN_ID,
   kind: 'managed_group',
-  version: '0.9.0',
+  version: '0.10.0',
   coreApiRange: '>=0.2.0',
   messageNamespace: 'official.piwigo-gallery',
   descriptionKey: 'official.piwigo-gallery.description',
@@ -42,8 +42,7 @@ export const piwigoGalleryManifest: PluginManifest = {
     '/gallery status',
     '/gallery configure',
     '/gallery download',
-    '/send gallery',
-    '/upload',
+    '/gallery upload',
     '/accept',
     '/refuse',
     '/register gallery'
@@ -71,14 +70,15 @@ export const piwigoGalleryManifest: PluginManifest = {
         titleKey: 'official.piwigo-gallery.help.upload.title',
         summaryKey: 'official.piwigo-gallery.help.upload.summary',
         order: 20,
-        commands: ['/send gallery', '/upload'],
+        commands: ['/gallery upload'],
         instructionKeys: ['official.piwigo-gallery.help.upload.instruction'],
-        exampleKeys: ['official.piwigo-gallery.help.send.example', 'official.piwigo-gallery.help.upload.example'],
+        exampleKeys: ['official.piwigo-gallery.help.upload.example'],
         keywords: ['upload', 'send', 'documents', 'photos'],
         availability: {
           invocation: 'either',
           permission: PIWIGO_GALLERY_PERMISSIONS.upload,
           requiresCurrentManagedGroupMembership: true,
+          currentManagedGroupMembershipMode: 'effective_scope',
           allowCurrentManagedGroupMemberConfigPath: 'access.allowScopeMemberUploads'
         }
       },
@@ -95,6 +95,7 @@ export const piwigoGalleryManifest: PluginManifest = {
           invocation: 'group_only',
           permission: PIWIGO_GALLERY_PERMISSIONS.download,
           requiresCurrentManagedGroupMembership: true,
+          currentManagedGroupMembershipMode: 'effective_scope',
           allowCurrentManagedGroupMemberConfigPath: 'access.allowScopeMemberDownloads'
         }
       },
@@ -170,7 +171,7 @@ export const piwigoGalleryManifest: PluginManifest = {
     }
   ],
   databases: piwigoGalleryDatabases,
-  dataVersion: '7',
+  dataVersion: '9',
   dependencies: [
     { pluginId: 'official.community-events', versionRange: '>=0.5.0', optional: true }
   ],
@@ -181,7 +182,7 @@ export const piwigoGalleryManifest: PluginManifest = {
         description: 'Guided gallery upload setup before document collection starts.',
         mode: 'core-flow',
         scope: 'actor-chat',
-        commands: ['/send gallery'],
+        commands: ['/gallery upload'],
         cancellableStates: ['active'],
         terminalStates: ['completed', 'cancelled', 'expired'],
         effects: ['discard-gallery-upload-draft']
@@ -191,7 +192,7 @@ export const piwigoGalleryManifest: PluginManifest = {
         description: 'Active gallery document collection or upload batch.',
         mode: 'plugin-handler',
         scope: 'actor-chat',
-        commands: ['/send gallery', '/upload'],
+        commands: ['/gallery upload'],
         cancellableStates: ['collecting'],
         terminalStates: ['completed', 'cancelled', 'expired', 'failed'],
         effects: ['delete-staged-media', 'clear-active-batch'],
@@ -227,7 +228,7 @@ export const piwigoGalleryManifest: PluginManifest = {
       {
         intent: 'gallery_upload',
         description: 'Start, finalize, or cancel a guided gallery upload batch.',
-        commands: ['/send gallery', '/upload']
+        commands: ['/gallery upload']
       },
       {
         intent: 'gallery_download',

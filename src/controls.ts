@@ -34,7 +34,7 @@ function control(input: {
       : undefined,
     sensitivity: input.sensitive ? { sensitive: true, redact: 'configured-state' } : { sensitive: false, redact: 'none' },
     auditAction: 'operator_console.plugin_config.update',
-    relatedCommandIds: ['/gallery status', '/gallery configure', '/send gallery', '/upload'],
+    relatedCommandIds: ['/gallery status', '/gallery configure', '/gallery upload'],
     relatedActionIds: []
   });
 }

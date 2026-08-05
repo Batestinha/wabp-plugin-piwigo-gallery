@@ -1307,8 +1307,23 @@ async function dispatchNextAnnouncementFile(
       type: 'audit.record',
       action: 'piwigo-gallery.announce.failed',
       metadataJson: { announcementId, reason: 'announcement media image ID is missing' }
+      }];
+  }
+  if (!next.sha256 || !/^[a-f0-9]{64}$/.test(next.sha256)) {
+    markAnnouncement(
+      db,
+      announcement,
+      claimId,
+      'failed',
+      'Announcement media is missing its immutable SHA-256 digest.'
+    );
+    return [{
+      type: 'audit.record',
+      action: 'piwigo-gallery.announce.failed',
+      metadataJson: { announcementId, reason: 'announcement media SHA-256 digest is missing' }
     }];
   }
+  const expectedSha256 = next.sha256;
 
   const connection = await resolveGalleryConnection(
     context.dataStore,
@@ -1359,7 +1374,7 @@ async function dispatchNextAnnouncementFile(
       }];
     }
     const file = await withAlbumAnnouncementLeaseHeartbeat(db, announcement, claimId, () =>
-      client.downloadForBot({ imageId })
+      client.downloadForAnnouncement({ imageId, expectedSha256 })
     );
     const captionValues = {
       album: announcement.albumName,
@@ -1517,7 +1532,12 @@ function announcementFileIdempotencyKey(
 }
 
 function announcementDueAt(announcement: PiwigoAlbumAnnouncement): Date {
-  return new Date(announcement.downloadNextRetryAt ?? announcement.announceAt);
+  return new Date(
+    announcement.downloadNextRetryAt &&
+      new Date(announcement.downloadNextRetryAt).getTime() > new Date(announcement.announceAt).getTime()
+      ? announcement.downloadNextRetryAt
+      : announcement.announceAt
+  );
 }
 
 function renewAlbumAnnouncementLease(

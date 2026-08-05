@@ -152,6 +152,7 @@ export interface PiwigoAlbumAnnouncementFile {
   imageId?: number | undefined;
   fileId?: string | undefined;
   downloadToken?: string | undefined;
+  sha256?: string | undefined;
   filename: string;
   mimeType: string;
   deliveryStatus?: 'pending' | 'dispatching' | 'delivered' | undefined;
@@ -328,6 +329,7 @@ interface AnnouncementFileRow extends PluginDatabaseRow {
   image_id: number | null;
   file_id: string | null;
   download_token: string | null;
+  sha256: string | null;
   filename: string;
   mime_type: string;
   delivery_status: NonNullable<PiwigoAlbumAnnouncementFile['deliveryStatus']>;
@@ -2265,7 +2267,7 @@ function linkRequestFromRow(db: PluginDatabase, row: LinkRequestRow): GalleryLin
 
 function announcementFromRow(db: PluginDatabase, row: AnnouncementRow): StoredPiwigoAlbumAnnouncement {
   const files = db.all<AnnouncementFileRow>(
-    `SELECT position, image_id, file_id, download_token, filename, mime_type,
+    `SELECT position, image_id, file_id, download_token, sha256, filename, mime_type,
             delivery_status, delivery_claim_id, delivery_started_at, delivered_at
        FROM gallery_album_announcement_files
       WHERE announcement_id = ? ORDER BY position`,
@@ -2275,6 +2277,7 @@ function announcementFromRow(db: PluginDatabase, row: AnnouncementRow): StoredPi
     ...(file.image_id !== null ? { imageId: file.image_id } : {}),
     ...(file.file_id ? { fileId: file.file_id } : {}),
     ...(file.download_token ? { downloadToken: file.download_token } : {}),
+    ...(file.sha256 ? { sha256: file.sha256 } : {}),
     filename: file.filename,
     mimeType: file.mime_type,
     deliveryStatus: file.delivery_status,
@@ -2336,16 +2339,20 @@ function insertAnnouncementFile(
   if (file.imageId === undefined || !Number.isInteger(file.imageId) || file.imageId <= 0) {
     throw new GalleryStorageInvariantError('Album announcement file requires a positive immutable Piwigo image ID.');
   }
+  if (!file.sha256 || !/^[a-f0-9]{64}$/.test(file.sha256)) {
+    throw new GalleryStorageInvariantError('Album announcement file requires a lowercase SHA-256 digest.');
+  }
   db.run(
     `INSERT INTO gallery_album_announcement_files (
-      announcement_id, position, image_id, file_id, download_token, filename, mime_type,
+      announcement_id, position, image_id, file_id, download_token, sha256, filename, mime_type,
       delivery_status, delivery_claim_id, delivery_started_at, delivered_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     announcementId,
     position,
     file.imageId,
     null,
     null,
+    file.sha256,
     file.filename,
     file.mimeType,
     file.deliveryStatus ?? 'pending',
@@ -2515,6 +2522,7 @@ const legacyAnnouncementSchema = z.object({
   userDisplayName: z.string(),
   files: z.array(z.object({
     imageId: z.number().int().positive(),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
     filename: z.string().min(1),
     mimeType: z.string().min(1)
   }).passthrough()),
@@ -2548,6 +2556,11 @@ function importLegacyRecord(db: PluginDatabase, row: LegacyPluginDataRecord, imp
   if (row.key.startsWith('album-announcement:') && !row.key.startsWith('album-announcement-dedupe:')) {
     const parsed = legacyAnnouncementSchema.safeParse(row.valueJson);
     if (!parsed.success || !legacyScopeMatches(row, parsed.data.scopeId)) return false;
+    if (parsed.data.files.some((file) => file.sha256 === undefined)) {
+      // Pre-digest announcement media cannot be verified. Consume the legacy
+      // record without recreating a pending delivery that could fetch mutable bytes.
+      return true;
+    }
     if (!getAlbumAnnouncement(db, parsed.data.scopeId, parsed.data.id)) saveAlbumAnnouncement(db, parsed.data);
     return true;
   }

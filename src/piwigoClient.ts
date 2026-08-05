@@ -1,4 +1,5 @@
 import type { GalleryConnection } from './config';
+import { createHash } from 'node:crypto';
 import { openAsBlob } from 'node:fs';
 import { z } from 'zod';
 import type { GalleryAlbumSource } from './albumMetadata';
@@ -88,6 +89,8 @@ const uploadIdempotencyKeySchema = z.string()
   .max(128)
   .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$/);
 
+const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
+
 const peopleSchema = z.object({
   people: z.array(z.object({
     id: z.number().int().positive(),
@@ -130,6 +133,10 @@ const downloadResultSchema = z.object({
   mime_type: z.string().trim().min(1),
   content_base64: z.string().min(1)
 }).passthrough();
+
+const announcementDownloadResultSchema = downloadResultSchema.extend({
+  sha256: sha256Schema
+});
 
 export class PiwigoApiError extends Error {
   constructor(
@@ -284,6 +291,32 @@ export class PiwigoGalleryClient {
       filename: result.filename,
       mimeType: result.mime_type,
       buffer: Buffer.from(result.content_base64, 'base64')
+    };
+  }
+
+  async downloadForAnnouncement(input: {
+    imageId: number;
+    expectedSha256: string;
+  }): Promise<{ filename: string; mimeType: string; buffer: Buffer }> {
+    const method = 'wabp.piwigo.media.downloadForAnnouncement';
+    const imageId = z.number().int().positive().parse(input.imageId);
+    const expectedSha256 = sha256Schema.parse(input.expectedSha256);
+    const result = await this.post(method, {
+      image_id: imageId,
+      expected_sha256: expectedSha256
+    }, announcementDownloadResultSchema);
+    const buffer = Buffer.from(result.content_base64, 'base64');
+    const actualSha256 = createHash('sha256').update(buffer).digest('hex');
+    if (result.sha256 !== expectedSha256 || actualSha256 !== expectedSha256) {
+      throw new PiwigoApiError(
+        'Piwigo announcement media failed local SHA-256 verification.',
+        method
+      );
+    }
+    return {
+      filename: result.filename,
+      mimeType: result.mime_type,
+      buffer
     };
   }
 

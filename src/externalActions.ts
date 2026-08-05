@@ -101,7 +101,7 @@ export const piwigoGalleryExternalActionSchemas = {
   albumUploadObserved: z.object({
     eventId: z.string().trim().min(1).max(160),
     scopeId: z.string().trim().min(1),
-    albumId: z.union([z.string().trim().min(1), z.number().int().positive()]).optional(),
+    albumId: z.union([z.string().trim().min(1), z.number().int().positive()]),
     albumName: z.string().trim().min(1).max(200),
     siteLabel: z.string().trim().min(1).max(120),
     userDisplayName: z.string().trim().min(1).max(120),
@@ -478,8 +478,8 @@ class PiwigoGalleryExternalActionRuntime {
     if (!config.newAlbumAnnouncementsEnabled) {
       return { accepted: false, duplicate: false, reason: 'new album announcements are disabled for this scope' };
     }
-    const albumId = input.albumId !== undefined ? String(input.albumId) : undefined;
-    const dedupeKey = albumId ? `album:${albumId}` : `event:${input.eventId}`;
+    const albumId = String(input.albumId);
+    const dedupeKey = `album:${albumId}`;
     const observedAt = input.observedAt ?? new Date().toISOString();
     const observedDeadline = new Date(Math.max(
       Date.now(),
@@ -552,7 +552,7 @@ class PiwigoGalleryExternalActionRuntime {
       dedupeKey,
       scopeId: input.scopeId,
       announcementGroupWid,
-      ...(albumId ? { albumId } : {}),
+      albumId,
       albumName: input.albumName,
       siteLabel: input.siteLabel,
       userDisplayName: input.userDisplayName,

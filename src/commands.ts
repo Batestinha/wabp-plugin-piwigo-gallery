@@ -799,6 +799,7 @@ async function startUploadFlow(
     stage = 'private-flow';
     const flowStart = await context.flowEngine.startPrivateContinuation({
       definition,
+      initialPromptTranslator: t,
       originMessage: ctx.message,
       recipientWid: privateActorWid,
       scopeId: target.scopeId,

@@ -51,16 +51,6 @@ export interface PiwigoDownloadForBotResult {
   content_base64: string;
 }
 
-export interface PiwigoCalendarPublishResult {
-  scope_id: string;
-  calendar_id: string;
-  label: string;
-  subscription_url?: string | undefined;
-  webcal_url?: string | undefined;
-  calendar_url?: string | undefined;
-  updated_on: string;
-}
-
 const piwigoFailureSchema = z.object({
   stat: z.literal('fail'),
   err: z.number().int().optional(),
@@ -106,16 +96,6 @@ const linkResultSchema = z.object({
 const registrationResultSchema = z.object({
   username: z.string().trim().min(1),
   pending: z.boolean().optional()
-}).passthrough();
-
-const calendarPublishResultSchema = z.object({
-  scope_id: z.string().trim().min(1),
-  calendar_id: z.string().trim().min(1),
-  label: z.string().trim().min(1),
-  subscription_url: z.string().optional(),
-  webcal_url: z.string().optional(),
-  calendar_url: z.string().optional(),
-  updated_on: z.string().trim().min(1)
 }).passthrough();
 
 const uploadResultSchema = z.object({
@@ -207,20 +187,6 @@ export class PiwigoGalleryClient {
       { username, whatsapp_jid: whatsappJid, scope_id: scopeId },
       registrationResultSchema
     );
-  }
-
-  publishCalendar(input: {
-    scopeId: string;
-    calendarId: string;
-    label: string;
-    icsBody: string;
-  }): Promise<PiwigoCalendarPublishResult> {
-    return this.post('wabp.piwigo.calendar.publish', {
-      scope_id: input.scopeId,
-      calendar_id: input.calendarId,
-      label: input.label,
-      ics_body: input.icsBody
-    }, calendarPublishResultSchema);
   }
 
   uploadForJid(input: {

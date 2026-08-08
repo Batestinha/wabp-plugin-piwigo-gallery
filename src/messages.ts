@@ -64,7 +64,7 @@ export const piwigoGalleryMessages: MessageCatalog = {
   'official.piwigo-gallery.flow.event.choice': '{title} — {date} — {place} — {eventId}',
   'official.piwigo-gallery.flow.where': 'Where did you go?',
   'official.piwigo-gallery.flow.when': 'When was it? Use dd-mm-yyyy.',
-  'official.piwigo-gallery.flow.with': 'Who was there? Reply with one or more numbers.',
+  'official.piwigo-gallery.flow.with': 'Who was there?',
   'official.piwigo-gallery.flow.confirm': 'Start collecting gallery documents with these answers?',
   'official.piwigo-gallery.flow.confirm.where': 'Where',
   'official.piwigo-gallery.flow.confirm.when': 'When',

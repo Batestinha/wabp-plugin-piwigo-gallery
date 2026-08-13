@@ -225,9 +225,9 @@ export function registerPiwigoGalleryCommands(context: PluginCommandContext): vo
     context.config.PIWIGO_GALLERY_DEFAULT_BOT_SECRET
   ));
 
-  router.register('register', 'gallery', galleryAuthCommand({
+  router.register('gallery', 'signup', galleryAuthCommand({
     auditAction: 'piwigo-gallery.account.register',
-    usage: '/register gallery Your Name',
+    usage: '/gallery signup Your Name',
     descriptionKey: 'official.piwigo-gallery.help.register',
     topicId: 'link-gallery-account',
     exampleKey: 'official.piwigo-gallery.help.register.example'

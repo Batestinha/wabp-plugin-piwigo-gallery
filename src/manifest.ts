@@ -33,7 +33,7 @@ export const piwigoGalleryDatabases = [{
 export const piwigoGalleryManifest: PluginManifest = {
   pluginId: PIWIGO_GALLERY_PLUGIN_ID,
   kind: 'managed_group',
-  version: '0.12.0',
+  version: '0.13.0',
   coreApiRange: '>=0.2.0',
   messageNamespace: 'official.piwigo-gallery',
   descriptionKey: 'official.piwigo-gallery.description',
@@ -45,7 +45,7 @@ export const piwigoGalleryManifest: PluginManifest = {
     '/gallery upload',
     '/accept',
     '/refuse',
-    '/register gallery'
+    '/gallery signup'
   ],
   help: {
     featureId: 'gallery',
@@ -104,10 +104,10 @@ export const piwigoGalleryManifest: PluginManifest = {
         titleKey: 'official.piwigo-gallery.help.account.title',
         summaryKey: 'official.piwigo-gallery.help.account.summary',
         order: 40,
-        commands: ['/accept', '/refuse', '/register gallery'],
+        commands: ['/accept', '/refuse', '/gallery signup'],
         instructionKeys: ['official.piwigo-gallery.help.account.instruction'],
         exampleKeys: ['official.piwigo-gallery.help.register.example'],
-        keywords: ['account', 'link', 'register', 'accept', 'refuse'],
+        keywords: ['account', 'link', 'signup', 'register', 'accept', 'refuse'],
         availability: { invocation: 'either' }
       }
     ]
@@ -238,7 +238,7 @@ export const piwigoGalleryManifest: PluginManifest = {
       {
         intent: 'gallery_account',
         description: 'Accept, refuse, or register a linked gallery account.',
-        commands: ['/accept', '/refuse', '/register gallery']
+        commands: ['/accept', '/refuse', '/gallery signup']
       }
     ]
   }

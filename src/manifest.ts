@@ -19,8 +19,7 @@ export const PIWIGO_GALLERY_EXTERNAL_ACTIONS = {
 
 export const PIWIGO_GALLERY_PERMISSIONS = {
   configure: 'piwigo-gallery.configure',
-  upload: 'piwigo-gallery.upload',
-  download: 'piwigo-gallery.download'
+  upload: 'piwigo-gallery.upload'
 } as const;
 
 export const piwigoGalleryDatabases = [{
@@ -33,7 +32,7 @@ export const piwigoGalleryDatabases = [{
 export const piwigoGalleryManifest: PluginManifest = {
   pluginId: PIWIGO_GALLERY_PLUGIN_ID,
   kind: 'managed_group',
-  version: '0.14.0',
+  version: '0.15.0',
   coreApiRange: '>=0.2.0',
   messageNamespace: 'official.piwigo-gallery',
   descriptionKey: 'official.piwigo-gallery.description',
@@ -41,7 +40,6 @@ export const piwigoGalleryManifest: PluginManifest = {
   commands: [
     '/gallery status',
     '/gallery configure',
-    '/gallery download',
     '/gallery upload',
     '/gallery signup'
   ],
@@ -81,23 +79,6 @@ export const piwigoGalleryManifest: PluginManifest = {
         }
       },
       {
-        topicId: 'download-gallery',
-        titleKey: 'official.piwigo-gallery.help.download.title',
-        summaryKey: 'official.piwigo-gallery.help.download.summary',
-        order: 30,
-        commands: ['/gallery download'],
-        instructionKeys: ['official.piwigo-gallery.help.download.instruction'],
-        exampleKeys: ['official.piwigo-gallery.help.download.example'],
-        keywords: ['download', 'image', 'file', 'token'],
-        availability: {
-          invocation: 'group_only',
-          permission: PIWIGO_GALLERY_PERMISSIONS.download,
-          requiresCurrentManagedGroupMembership: true,
-          currentManagedGroupMembershipMode: 'effective_scope',
-          allowCurrentManagedGroupMemberConfigPath: 'access.allowScopeMemberDownloads'
-        }
-      },
-      {
         topicId: 'link-gallery-account',
         titleKey: 'official.piwigo-gallery.help.account.title',
         summaryKey: 'official.piwigo-gallery.help.account.summary',
@@ -113,8 +94,7 @@ export const piwigoGalleryManifest: PluginManifest = {
   eventSubscriptions: ['message', 'private.message', 'plugin.job'],
   requiredPermissions: [
     PIWIGO_GALLERY_PERMISSIONS.configure,
-    PIWIGO_GALLERY_PERMISSIONS.upload,
-    PIWIGO_GALLERY_PERMISSIONS.download
+    PIWIGO_GALLERY_PERMISSIONS.upload
   ],
   requiredBotCapabilities: [],
   configSchema: piwigoGalleryConfigSchema,
@@ -203,14 +183,12 @@ export const piwigoGalleryManifest: PluginManifest = {
     useCases: [
       'Explain whether gallery uploads are configured for the current scope.',
       'Start and manage a guided gallery upload flow.',
-      'Download a Piwigo media file into WhatsApp.',
       'Help users link or register a Piwigo account.'
     ],
     prerequisites: [
       'enabled=true in the target scope.',
       'The deployment must provide the internal Piwigo base URL and shared bot secret before uploads can start.',
-      'Upload users need the scoped piwigo-gallery.upload permission.',
-      'Download users need the scoped piwigo-gallery.download permission.'
+      'Upload users need the scoped piwigo-gallery.upload permission.'
     ],
     workflows: [
       {
@@ -227,11 +205,6 @@ export const piwigoGalleryManifest: PluginManifest = {
         intent: 'gallery_upload',
         description: 'Start, finalize, or cancel a guided gallery upload batch.',
         commands: ['/gallery upload']
-      },
-      {
-        intent: 'gallery_download',
-        description: 'Download a gallery file into WhatsApp.',
-        commands: ['/gallery download']
       },
       {
         intent: 'gallery_account',

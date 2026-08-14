@@ -50,25 +50,13 @@ export const piwigoGalleryControls: ControlDescriptor[] = [
   }),
   control({
     path: 'access.allowScopeMemberUploads',
-    label: 'Gallery access',
-    description: 'Manage who may upload to and download from the Piwigo gallery in this scope.',
+    label: 'Gallery upload access',
+    description: 'Manage who may upload to the Piwigo gallery in this scope.',
     order: 30,
     schema: { type: 'boolean' },
     ui: {
       widget: 'builder',
       builderId: 'official.piwigo-gallery.access.v1'
-    }
-  }),
-  control({
-    path: 'access.allowScopeMemberDownloads',
-    label: 'Gallery download access',
-    description: 'Manage who may download from the Piwigo gallery in this scope.',
-    order: 31,
-    schema: { type: 'boolean' },
-    ui: {
-      widget: 'builder',
-      builderId: 'official.piwigo-gallery.access.v1',
-      hideWhenBuilderMounted: true
     }
   }),
   control({

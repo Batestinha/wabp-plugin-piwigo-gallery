@@ -24,8 +24,7 @@ export const piwigoGalleryConfigSchema = z.object({
   autoFinalizeMinutes: z.number().int().min(1).max(24 * 60).default(30),
   maxFileBytes: z.number().int().min(0).max(25 * 1024 * 1024 * 1024).default(0),
   access: z.object({
-    allowScopeMemberUploads: z.boolean().default(false),
-    allowScopeMemberDownloads: z.boolean().default(false)
+    allowScopeMemberUploads: z.boolean().default(false)
   }).default({}),
   mediaDumpDocumentsHint: z.string().trim().max(500).default(''),
   accountCreationLabel: z.string().trim().min(1).max(120).default('Piwigo'),

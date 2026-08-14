@@ -33,7 +33,7 @@ export const piwigoGalleryDatabases = [{
 export const piwigoGalleryManifest: PluginManifest = {
   pluginId: PIWIGO_GALLERY_PLUGIN_ID,
   kind: 'managed_group',
-  version: '0.13.0',
+  version: '0.14.0',
   coreApiRange: '>=0.2.0',
   messageNamespace: 'official.piwigo-gallery',
   descriptionKey: 'official.piwigo-gallery.description',
@@ -43,8 +43,6 @@ export const piwigoGalleryManifest: PluginManifest = {
     '/gallery configure',
     '/gallery download',
     '/gallery upload',
-    '/accept',
-    '/refuse',
     '/gallery signup'
   ],
   help: {
@@ -104,10 +102,10 @@ export const piwigoGalleryManifest: PluginManifest = {
         titleKey: 'official.piwigo-gallery.help.account.title',
         summaryKey: 'official.piwigo-gallery.help.account.summary',
         order: 40,
-        commands: ['/accept', '/refuse', '/gallery signup'],
+        commands: ['/gallery signup'],
         instructionKeys: ['official.piwigo-gallery.help.account.instruction'],
         exampleKeys: ['official.piwigo-gallery.help.register.example'],
-        keywords: ['account', 'link', 'signup', 'register', 'accept', 'refuse'],
+        keywords: ['account', 'link', 'signup', 'register', 'confirmation'],
         availability: { invocation: 'either' }
       }
     ]
@@ -237,8 +235,8 @@ export const piwigoGalleryManifest: PluginManifest = {
       },
       {
         intent: 'gallery_account',
-        description: 'Accept, refuse, or register a linked gallery account.',
-        commands: ['/accept', '/refuse', '/gallery signup']
+        description: 'Register a linked gallery account; existing-account link requests open a guided WhatsApp confirmation automatically.',
+        commands: ['/gallery signup']
       }
     ]
   }

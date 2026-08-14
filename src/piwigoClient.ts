@@ -45,12 +45,6 @@ export interface PiwigoUploadResult {
   username?: string | undefined;
 }
 
-export interface PiwigoDownloadForBotResult {
-  filename: string;
-  mime_type: string;
-  content_base64: string;
-}
-
 const piwigoFailureSchema = z.object({
   stat: z.literal('fail'),
   err: z.number().int().optional(),
@@ -89,9 +83,11 @@ const peopleSchema = z.object({
 }).passthrough();
 
 const linkResultSchema = z.object({
-  status: z.string().trim().min(1),
+  status: z.enum(['approved', 'denied', 'scope_required']),
   username: z.string().optional()
 }).passthrough();
+
+export type PiwigoLinkCompletionResult = z.infer<typeof linkResultSchema>;
 
 const registrationResultSchema = z.object({
   username: z.string().trim().min(1),
@@ -168,14 +164,16 @@ export class PiwigoGalleryClient {
     whatsappJid: string,
     decision: 'approve' | 'deny',
     input: {
+      completionId?: string | undefined;
       scopeId?: string | undefined;
       eligibleScopes?: PiwigoEligibleScope[] | undefined;
     } = {}
-  ): Promise<{ status: string; username?: string | undefined }> {
+  ): Promise<PiwigoLinkCompletionResult> {
     return this.post('wabp.piwigo.link.completeRequest', {
       request_token: requestToken,
       whatsapp_jid: whatsappJid,
       decision,
+      ...(input.completionId ? { completion_id: input.completionId } : {}),
       ...(input.scopeId ? { scope_id: input.scopeId } : {}),
       ...(input.eligibleScopes ? { eligible_scopes_json: JSON.stringify(input.eligibleScopes) } : {})
     }, linkResultSchema);
@@ -237,27 +235,6 @@ export class PiwigoGalleryClient {
       uploadResultSchema,
       this.uploadTimeoutMs
     );
-  }
-
-  async downloadForBot(input: {
-    imageId?: number | undefined;
-    fileId?: string | undefined;
-    downloadToken?: string | undefined;
-    whatsappJid?: string | undefined;
-    scopeId?: string | undefined;
-  }): Promise<{ filename: string; mimeType: string; buffer: Buffer }> {
-    const result = await this.post('wabp.piwigo.media.downloadForBot', {
-      ...(input.imageId !== undefined ? { image_id: input.imageId } : {}),
-      ...(input.fileId ? { file_id: input.fileId } : {}),
-      ...(input.downloadToken ? { download_token: input.downloadToken } : {}),
-      ...(input.whatsappJid ? { whatsapp_jid: input.whatsappJid } : {}),
-      ...(input.scopeId ? { scope_id: input.scopeId } : {})
-    }, downloadResultSchema);
-    return {
-      filename: result.filename,
-      mimeType: result.mime_type,
-      buffer: Buffer.from(result.content_base64, 'base64')
-    };
   }
 
   async downloadForAnnouncement(input: {

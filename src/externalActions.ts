@@ -1,14 +1,21 @@
 import { createHash, randomInt, randomUUID } from 'node:crypto';
+import { FlowSessionStatus } from '@prisma/client';
 import { z } from 'zod';
+import {
+  ActivePrivateFlowConflictError,
+  type FlowSessionSnapshot
+} from '../../../adminBot/flows/flowEngine';
 import type { TranslateFn } from '../../../platform/i18n';
 import { enqueuePluginJob } from '../../../platform/jobs/queue';
 import type { PluginExternalActionRegistration } from '../../../platform/pluginRuntime/pluginExternalActions';
 import type { PluginDatabase } from '../../../platform/pluginRuntime/runtime/pluginDatabase';
 import type { PluginExternalActionRegistrationContext } from '../../../platform/pluginRuntime/types';
+import type { TransportAdapter } from '../../../platform/transport/transportTypes';
 import { parsePiwigoGalleryConfig } from './config';
 import {
   linkChoiceCountForScopes,
-  listConfiguredPiwigoGalleryEligibleScopes
+  listConfiguredPiwigoGalleryEligibleScopes,
+  type ConfiguredPiwigoGalleryScope
 } from './eligibility';
 import {
   PIWIGO_GALLERY_ANNOUNCE_NEW_ALBUM_JOB,
@@ -17,14 +24,28 @@ import {
 } from './manifest';
 import { piwigoGalleryMessages } from './messages';
 import {
+  createGalleryLinkFlowDefinition,
+  galleryLinkDecisionPurpose,
+  galleryLinkFlowDecision,
+  galleryLinkFlowInitialData,
+  galleryLinkFlowRequest,
+  PIWIGO_GALLERY_LINK_FLOW_TYPE,
+  type GalleryLinkFlowRequest
+} from './flow';
+import {
+  PiwigoApiError,
+  PiwigoGalleryClient,
+  type PiwigoLinkCompletionResult
+} from './piwigoClient';
+import {
   bindAlbumAnnouncementTarget,
   consumeRegistrationOtp,
   GalleryStorageConflictError,
   getAlbumAnnouncementByDedupeKey,
   getRegistrationOtp,
   pruneExpiredRegistrationOtps,
+  resolveGalleryConnection,
   saveAlbumAnnouncement,
-  saveLinkRequest,
   saveRegistrationOtp,
   type PiwigoAlbumAnnouncementFile,
   type StoredPiwigoAlbumAnnouncement
@@ -69,8 +90,8 @@ const registrationOtpPayloadSchema = z.object({
 
 export const piwigoGalleryExternalActionSchemas = {
   whatsappLinkRequestStart: z.object({
-    requestId: z.string().trim().min(1),
-    requestToken: z.string().trim().min(1),
+    requestId: z.string().trim().min(1).max(160),
+    requestToken: z.string().trim().min(1).max(512),
     phone: z.string().trim().min(1),
     username: z.string().trim().min(1).max(100),
     siteLabel: z.string().trim().min(1).max(120).default('Piwigo'),
@@ -162,6 +183,410 @@ const PIWIGO_AUTH_CODE_PURPOSE_KEYS: Record<
 
 type AnyExternalActionRegistration = PluginExternalActionRegistration<any, any>;
 
+const registeredGalleryLinkFlowEngines = new WeakSet<PluginExternalActionRegistrationContext['flowEngine']>();
+
+const galleryLinkCompletionPlanSchema = z.object({
+  version: z.literal(1),
+  decision: z.enum(['approve', 'deny']),
+  requestId: z.string().trim().min(1).max(160),
+  requestToken: z.string().trim().min(1).max(512),
+  identityId: z.string().trim().min(1),
+  whatsappJid: z.string().trim().min(1),
+  scopeId: z.string().trim().min(1),
+  linkChoiceCount: z.number().int().min(1),
+  scopeOptions: z.array(z.object({
+    scopeId: z.string().trim().min(1),
+    label: z.string().trim().min(1)
+  }).strict()).min(1),
+  completionId: z.string().trim().min(1)
+}).strict();
+
+type GalleryLinkCompletionPlan = z.infer<typeof galleryLinkCompletionPlanSchema>;
+
+function registerPiwigoGalleryLinkFlow(
+  context: PluginExternalActionRegistrationContext,
+  eligibleScopesForIdentity: (identityId: string) => Promise<ConfiguredPiwigoGalleryScope[]>
+): void {
+  if (registeredGalleryLinkFlowEngines.has(context.flowEngine)) {
+    return;
+  }
+  context.flowEngine.register(createGalleryLinkFlowDefinition({
+    t: defaultPiwigoGalleryTranslator
+  }));
+  context.flowEngine.registerPromptHandler(
+    galleryLinkDecisionPurpose(),
+    async (lock, activeTransport) => {
+      if (!await context.flowEngine.getLockedPromptLock(lock.flowPromptId)) {
+        return false;
+      }
+      if (!lock.flowSessionId) {
+        await context.flowEngine.acknowledgePromptLock(lock.flowPromptId);
+        return true;
+      }
+      const snapshot = await context.flowEngine.getSessionSnapshot(lock.flowSessionId);
+      if (!snapshot || snapshot.flowType !== PIWIGO_GALLERY_LINK_FLOW_TYPE) {
+        await context.flowEngine.acknowledgePromptLock(lock.flowPromptId);
+        return true;
+      }
+      if (snapshot.status === FlowSessionStatus.ACTIVE) {
+        return false;
+      }
+      if (snapshot.status !== FlowSessionStatus.COMPLETED) {
+        await context.flowEngine.acknowledgePromptLock(lock.flowPromptId);
+        return true;
+      }
+      const request = galleryLinkFlowRequest(snapshot);
+      const decision = galleryLinkFlowDecision(snapshot);
+      if (
+        !request
+        && typeof snapshot.state.data.linkRequestFingerprint === 'string'
+        && decision
+      ) {
+        await context.flowEngine.acknowledgePromptLock(lock.flowPromptId);
+        return true;
+      }
+      if (
+        !request
+        || !decision
+        || snapshot.identityId !== request.identityId
+        || lock.voterIdentityId !== request.identityId
+      ) {
+        await context.audit.record({
+          actorIdentityId: snapshot.identityId,
+          action: 'piwigo-gallery.account.link.flow.invalid',
+          metadataJson: {
+            flowSessionId: snapshot.id,
+            flowPromptId: lock.flowPromptId
+          }
+        });
+        await context.flowEngine.acknowledgePromptLock(lock.flowPromptId);
+        return true;
+      }
+      const requestedFirstScope = request.scopeOptions[0];
+      if (!requestedFirstScope) {
+        await sendGalleryLinkTerminalResult(context, activeTransport, snapshot, request, {
+          text: request.copy.failed,
+          auditAction: 'piwigo-gallery.account.link.flow.failed',
+          auditMetadata: { reason: 'missing-scope', decision },
+          flowPromptId: lock.flowPromptId
+        });
+        return true;
+      }
+      const expectedCompletionId = `piwigo-gallery:link-flow:${snapshot.id}`;
+      const persistedPlan = await context.flowEngine.getPromptLockDecision(lock.flowPromptId);
+      let plan = galleryLinkCompletionPlanForRequest(
+        persistedPlan,
+        request,
+        decision,
+        expectedCompletionId
+      );
+      if (persistedPlan !== undefined && !plan) {
+        await context.audit.record({
+          actorIdentityId: request.identityId,
+          action: 'piwigo-gallery.account.link.flow.invalid',
+          metadataJson: {
+            flowSessionId: snapshot.id,
+            flowPromptId: lock.flowPromptId,
+            reason: 'completion-plan-mismatch'
+          }
+        });
+        await context.flowEngine.acknowledgePromptLock(lock.flowPromptId);
+        return true;
+      }
+      if (!plan) {
+        if (new Date(request.expiresAt).getTime() <= Date.now()) {
+          await sendGalleryLinkTerminalResult(context, activeTransport, snapshot, request, {
+            text: request.copy.expired,
+            auditAction: 'piwigo-gallery.account.link.flow.expired',
+            auditMetadata: { decision },
+            flowPromptId: lock.flowPromptId,
+            scopeId: requestedFirstScope.scopeId
+          });
+          return true;
+        }
+        const originallyAuthorizedScopeIds = new Set(
+          request.scopeOptions.map((scope) => scope.scopeId)
+        );
+        const currentScopes = (await eligibleScopesForIdentity(request.identityId))
+          .filter((scope) => originallyAuthorizedScopeIds.has(scope.scopeId));
+        const currentFirstScope = currentScopes[0];
+        if (!currentFirstScope) {
+          await sendGalleryLinkTerminalResult(context, activeTransport, snapshot, request, {
+            text: request.copy.failed,
+            auditAction: 'piwigo-gallery.account.link.flow.failed',
+            auditMetadata: { reason: 'authorization-changed', decision },
+            flowPromptId: lock.flowPromptId
+          });
+          return true;
+        }
+        const proposedPlan = galleryLinkCompletionPlanSchema.parse({
+          version: 1,
+          decision,
+          requestId: request.requestId,
+          requestToken: request.requestToken,
+          identityId: request.identityId,
+          whatsappJid: request.whatsappJid,
+          scopeId: currentFirstScope.scopeId,
+          linkChoiceCount: linkChoiceCountForScopes(currentScopes),
+          scopeOptions: currentScopes.map((scope) => ({
+            scopeId: scope.scopeId,
+            label: scope.label
+          })),
+          completionId: expectedCompletionId
+        });
+        plan = galleryLinkCompletionPlanForRequest(
+          await context.flowEngine.recordPromptLockDecision(lock.flowPromptId, proposedPlan),
+          request,
+          decision,
+          expectedCompletionId
+        );
+        if (!plan) {
+          throw new Error(`Piwigo link flow ${snapshot.id} persisted an invalid completion plan.`);
+        }
+      }
+      let connection;
+      try {
+        const config = parsePiwigoGalleryConfig(
+          await context.configFor(plan.scopeId, plan.identityId)
+        );
+        connection = await resolveGalleryConnection(
+          context.dataStore,
+          config,
+          context.config.PIWIGO_GALLERY_DEFAULT_BASE_URL,
+          context.config.PIWIGO_GALLERY_DEFAULT_BOT_SECRET
+        );
+      } catch (error) {
+        if (!isDeterministicGalleryLinkFailure(error)) {
+          throw error;
+        }
+      }
+      if (!connection) {
+        await sendGalleryLinkTerminalResult(context, activeTransport, snapshot, request, {
+          text: request.copy.failed,
+          auditAction: 'piwigo-gallery.account.link.flow.failed',
+          auditMetadata: { reason: 'connection-not-configured', decision },
+          flowPromptId: lock.flowPromptId,
+          scopeId: plan.scopeId
+        });
+        return true;
+      }
+      let result: PiwigoLinkCompletionResult;
+      try {
+        result = await new PiwigoGalleryClient(connection).completeLinkRequest(
+          plan.requestToken,
+          plan.whatsappJid,
+          plan.decision,
+          {
+            completionId: plan.completionId,
+            ...(plan.decision === 'approve' && plan.linkChoiceCount === 1
+              ? { scopeId: plan.scopeId }
+              : {}),
+            ...(plan.decision === 'approve' && plan.linkChoiceCount > 1
+              ? {
+                  eligibleScopes: plan.scopeOptions.map((scope) => ({
+                    scope_id: scope.scopeId,
+                    label: scope.label
+                  }))
+                }
+              : {})
+          }
+        );
+      } catch (error) {
+        if (!isDeterministicGalleryLinkFailure(error)) {
+          throw error;
+        }
+        await sendGalleryLinkTerminalResult(context, activeTransport, snapshot, request, {
+          text: request.copy.failed,
+          auditAction: 'piwigo-gallery.account.link.flow.failed',
+          auditMetadata: {
+            reason: error instanceof Error ? error.message : String(error),
+            decision
+          },
+          flowPromptId: lock.flowPromptId,
+          scopeId: plan.scopeId
+        });
+        return true;
+      }
+      const text = galleryLinkResultText(request, plan.decision, result);
+      if (!text) {
+        await sendGalleryLinkTerminalResult(context, activeTransport, snapshot, request, {
+          text: request.copy.failed,
+          auditAction: 'piwigo-gallery.account.link.flow.failed',
+          auditMetadata: {
+            reason: 'response-status-mismatch',
+            decision: plan.decision,
+            status: result.status
+          },
+          flowPromptId: lock.flowPromptId,
+          scopeId: plan.scopeId
+        });
+        return true;
+      }
+      await sendGalleryLinkTerminalResult(context, activeTransport, snapshot, request, {
+        text,
+        auditAction: 'piwigo-gallery.account.link.flow.completed',
+        auditMetadata: {
+          decision: plan.decision,
+          status: result.status,
+          username: result.username ?? request.username
+        },
+        flowPromptId: lock.flowPromptId,
+        scopeId: plan.scopeId
+      });
+      return true;
+    },
+    { recoverLocked: true }
+  );
+  registeredGalleryLinkFlowEngines.add(context.flowEngine);
+}
+
+async function sendGalleryLinkTerminalResult(
+  context: PluginExternalActionRegistrationContext,
+  transport: TransportAdapter,
+  snapshot: FlowSessionSnapshot,
+  request: GalleryLinkFlowRequest,
+  input: {
+    text: string;
+    auditAction: string;
+    auditMetadata: Record<string, unknown>;
+    flowPromptId: string;
+    scopeId?: string | undefined;
+  }
+): Promise<void> {
+  await transport.sendText(
+    snapshot.conversationChatId ?? snapshot.chatId,
+    input.text,
+    { idempotencyKey: `piwigo-gallery:link-flow:${snapshot.id}:result` }
+  );
+  await context.audit.record({
+    actorIdentityId: request.identityId,
+    ...(input.scopeId ? { scopeId: input.scopeId } : {}),
+    action: input.auditAction,
+    targetJson: {
+      requestId: request.requestId,
+      siteLabel: request.siteLabel
+    },
+    metadataJson: {
+      flowSessionId: snapshot.id,
+      flowPromptId: input.flowPromptId,
+      ...input.auditMetadata
+    }
+  });
+  if (!await context.flowEngine.redactPromptLockSessionData(
+    input.flowPromptId,
+    ['linkRequest']
+  )) {
+    throw new Error(`Piwigo link flow ${snapshot.id} could not redact its terminal request state.`);
+  }
+  await context.flowEngine.acknowledgePromptLock(input.flowPromptId);
+}
+
+function isDeterministicGalleryLinkFailure(error: unknown): boolean {
+  return error instanceof PiwigoApiError
+    && !error.ambiguousOutcome
+    && !isTransientGalleryLinkFailureCode(error.httpStatus)
+    && !isTransientGalleryLinkFailureCode(error.piwigoCode);
+}
+
+function isTransientGalleryLinkFailureCode(code: number | undefined): boolean {
+  return code === 408
+    || code === 423
+    || code === 425
+    || code === 429
+    || (code !== undefined && code >= 500 && code < 600);
+}
+
+function galleryLinkCompletionPlanForRequest(
+  value: unknown,
+  request: GalleryLinkFlowRequest,
+  decision: 'approve' | 'deny',
+  expectedCompletionId: string
+): GalleryLinkCompletionPlan | undefined {
+  const parsed = galleryLinkCompletionPlanSchema.safeParse(value);
+  if (!parsed.success) {
+    return undefined;
+  }
+  const plan = parsed.data;
+  const originallyAuthorizedScopeIds = new Set(
+    request.scopeOptions.map((scope) => scope.scopeId)
+  );
+  if (
+    plan.decision !== decision
+    || plan.requestId !== request.requestId
+    || plan.requestToken !== request.requestToken
+    || plan.identityId !== request.identityId
+    || plan.whatsappJid !== request.whatsappJid
+    || plan.completionId !== expectedCompletionId
+    || !plan.scopeOptions.some((scope) => scope.scopeId === plan.scopeId)
+    || plan.scopeOptions.some((scope) => !originallyAuthorizedScopeIds.has(scope.scopeId))
+  ) {
+    return undefined;
+  }
+  return plan;
+}
+
+function galleryLinkResultText(
+  request: GalleryLinkFlowRequest,
+  decision: 'approve' | 'deny',
+  result: PiwigoLinkCompletionResult
+): string | undefined {
+  if (decision === 'deny') {
+    return result.status === 'denied' ? request.copy.denied : undefined;
+  }
+  if (result.status === 'approved') {
+    return request.copy.confirmed;
+  }
+  return result.status === 'scope_required' ? request.copy.scopeRequired : undefined;
+}
+
+function assertSameGalleryLinkRequest(
+  snapshot: Pick<FlowSessionSnapshot, 'state'>,
+  expected: GalleryLinkFlowRequest
+): void {
+  const existing = galleryLinkFlowRequest(snapshot);
+  const persistedFingerprint = snapshot.state.data.linkRequestFingerprint;
+  if (
+    existing
+      ? sameGalleryLinkRequest(existing, expected)
+      : persistedFingerprint === galleryLinkRequestFingerprint(expected)
+  ) {
+    return;
+  }
+  throw httpError(409, 'requestId is already bound to a different Piwigo link request.');
+}
+
+function sameGalleryLinkRequest(
+  left: GalleryLinkFlowRequest,
+  right: GalleryLinkFlowRequest
+): boolean {
+  return left.requestId === right.requestId
+    && left.requestToken === right.requestToken
+    && left.identityId === right.identityId
+    && left.whatsappJid === right.whatsappJid
+    && left.username === right.username
+    && left.siteLabel === right.siteLabel
+    && left.linkChoiceCount === right.linkChoiceCount
+    && left.scopeOptions.length === right.scopeOptions.length
+    && left.scopeOptions.every((scope, index) => {
+      const candidate = right.scopeOptions[index];
+      return candidate?.scopeId === scope.scopeId && candidate.label === scope.label;
+    });
+}
+
+function galleryLinkRequestFingerprint(request: GalleryLinkFlowRequest): string {
+  return opaqueKey(
+    'piwigo-gallery-link-request-v1',
+    request.requestId,
+    request.requestToken,
+    request.identityId,
+    request.whatsappJid,
+    request.username,
+    request.siteLabel,
+    String(request.linkChoiceCount),
+    JSON.stringify(request.scopeOptions)
+  );
+}
+
 export interface PiwigoGalleryExternalActionDependencies {
   listEligibleScopes?: typeof listConfiguredPiwigoGalleryEligibleScopes | undefined;
   registrationOtpRateLimits?: Partial<PiwigoGalleryRateLimitPolicy> | undefined;
@@ -173,6 +598,10 @@ export function createPiwigoGalleryExternalActions(
   dependencies: PiwigoGalleryExternalActionDependencies = {}
 ): AnyExternalActionRegistration[] {
   const runtime = new PiwigoGalleryExternalActionRuntime(context, dependencies);
+  registerPiwigoGalleryLinkFlow(
+    context,
+    (identityId) => runtime.eligibleScopesForIdentity(identityId)
+  );
   return [
     {
       actionId: PIWIGO_GALLERY_EXTERNAL_ACTIONS.whatsappLinkRequestStart,
@@ -237,29 +666,77 @@ class PiwigoGalleryExternalActionRuntime {
     }
     const linkChoiceCount = linkChoiceCountForScopes(scopes);
     const now = new Date();
-    const database = await this.database();
-    saveLinkRequest(database, {
+    const expiresAt = new Date(now.getTime() + input.expiresInMinutes * 60_000);
+    const firstScope = scopes[0]!;
+    const t = await this.piwigoTranslator(identity.identityId, firstScope.scopeId);
+    const requestData = galleryLinkFlowInitialData({
+      t,
       requestId: input.requestId,
       requestToken: input.requestToken.toUpperCase(),
       identityId: identity.identityId,
       whatsappJid: identity.piwigoAccountWid,
+      username: input.username,
       siteLabel: input.siteLabel,
       linkChoiceCount,
       scopeOptions: scopes.map((scope) => ({ scopeId: scope.scopeId, label: scope.label })),
-      createdAt: now.toISOString(),
-      expiresAt: new Date(now.getTime() + input.expiresInMinutes * 60_000).toISOString()
+      expiresAt
     });
-    await this.context.platform.messaging.sendText(
-      identity.deliveryChatId,
-      formatWhatsappLinkRequestMessage(
-        await this.piwigoTranslator(identity.identityId, scopes[0]?.scopeId),
-        input.username,
-        input.siteLabel,
-        linkChoiceCount
-      ),
-      { idempotencyKey: `piwigo-gallery:link-request:${input.requestId}` },
-      signal
-    );
+    const initialData = {
+      ...requestData,
+      linkRequestFingerprint: galleryLinkRequestFingerprint(requestData.linkRequest)
+    };
+    const definition = createGalleryLinkFlowDefinition({
+      t: defaultPiwigoGalleryTranslator,
+      timeoutMinutes: input.expiresInMinutes
+    });
+    const externalIdempotencyKey = `piwigo-gallery:link-request:${opaqueKey(
+      this.context.runtimeBindingId,
+      identity.identityId,
+      input.requestId
+    )}`;
+    const inspection = await this.context.flowEngine.inspectIdentityFlowStart({
+      actorIdentityId: identity.identityId,
+      externalIdempotencyKey
+    });
+    if (inspection.kind === 'conflict') {
+      throw httpError(409, 'This WhatsApp identity is already answering another private flow.');
+    }
+    if (inspection.kind === 'duplicate') {
+      assertSameGalleryLinkRequest(inspection.session, initialData.linkRequest);
+    }
+    try {
+      const started = await this.context.flowEngine.startFlowForIdentity({
+        definition,
+        actorIdentityId: identity.identityId,
+        externalIdempotencyKey,
+        origin: { chatId: identity.deliveryChatId, context: 'private' },
+        scopeId: firstScope.scopeId,
+        initialData,
+        initialPromptTranslator: t
+      });
+      if (started.deduplicated) {
+        const snapshot = await this.context.flowEngine.getSessionSnapshot(started.flowSessionId);
+        if (!snapshot) {
+          throw new Error(`Piwigo link flow ${started.flowSessionId} could not be recovered.`);
+        }
+        assertSameGalleryLinkRequest(snapshot, initialData.linkRequest);
+      }
+    } catch (error) {
+      const afterFailure = await this.context.flowEngine.inspectIdentityFlowStart({
+        actorIdentityId: identity.identityId,
+        externalIdempotencyKey
+      }).catch(() => undefined);
+      if (afterFailure?.kind === 'duplicate') {
+        assertSameGalleryLinkRequest(afterFailure.session, initialData.linkRequest);
+      } else if (
+        error instanceof ActivePrivateFlowConflictError
+        || afterFailure?.kind === 'conflict'
+      ) {
+        throw httpError(409, 'This WhatsApp identity is already answering another private flow.');
+      } else {
+        throw error;
+      }
+    }
     return {
       requestId: input.requestId,
       whatsappJid: identity.piwigoAccountWid,
@@ -747,7 +1224,7 @@ class PiwigoGalleryExternalActionRuntime {
     throw httpError(503, 'The album announcement changed concurrently; retry this observation.');
   }
 
-  private eligibleScopesForIdentity(identityId: string) {
+  eligibleScopesForIdentity(identityId: string) {
     return (this.dependencies.listEligibleScopes ?? listConfiguredPiwigoGalleryEligibleScopes)(identityId, {
       whatsAppAccountId: this.context.whatsAppAccountId,
       runtimeBindingId: this.context.runtimeBindingId,
@@ -1090,18 +1567,6 @@ function upsertAlbumCatchUp(
     }
   }
   throw httpError(503, 'The album catch-up announcement changed concurrently; retry this observation.');
-}
-
-export function formatWhatsappLinkRequestMessage(
-  t: TranslateFn,
-  username: string,
-  siteLabel: string,
-  scopeCount: number
-): string {
-  return [
-    t('official.piwigo-gallery.linkRequest', { username, siteLabel }),
-    scopeCount > 1 ? t('official.piwigo-gallery.linkRequestScopeChoice', { siteLabel }) : undefined
-  ].filter((line): line is string => Boolean(line)).join(' ');
 }
 
 function formatRegistrationOtpMessage(t: TranslateFn, otp: string): string {

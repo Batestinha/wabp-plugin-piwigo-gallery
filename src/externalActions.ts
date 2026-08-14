@@ -10,7 +10,6 @@ import { enqueuePluginJob } from '../../../platform/jobs/queue';
 import type { PluginExternalActionRegistration } from '../../../platform/pluginRuntime/pluginExternalActions';
 import type { PluginDatabase } from '../../../platform/pluginRuntime/runtime/pluginDatabase';
 import type { PluginExternalActionRegistrationContext } from '../../../platform/pluginRuntime/types';
-import type { TransportAdapter } from '../../../platform/transport/transportTypes';
 import { parsePiwigoGalleryConfig } from './config';
 import {
   linkChoiceCountForScopes,
@@ -442,7 +441,7 @@ function registerPiwigoGalleryLinkFlow(
 
 async function sendGalleryLinkTerminalResult(
   context: PluginExternalActionRegistrationContext,
-  transport: TransportAdapter,
+  messaging: PluginExternalActionRegistrationContext['platform']['messaging'],
   snapshot: FlowSessionSnapshot,
   request: GalleryLinkFlowRequest,
   input: {
@@ -453,7 +452,7 @@ async function sendGalleryLinkTerminalResult(
     scopeId?: string | undefined;
   }
 ): Promise<void> {
-  await transport.sendText(
+  await messaging.sendText(
     snapshot.conversationChatId ?? snapshot.chatId,
     input.text,
     { idempotencyKey: `piwigo-gallery:link-flow:${snapshot.id}:result` }

@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import type { FlowDefinition } from '../../../adminBot/flows/flowTypes';
 import type { FlowSessionSnapshot } from '../../../adminBot/flows/flowEngine';
 import type { TranslateFn } from '../../../platform/i18n';
@@ -6,6 +7,146 @@ import type { EventAlbumSource } from '../community-events/serviceApi';
 import { manualGalleryAlbumSource, type GalleryAlbumSource } from './albumMetadata';
 
 export const PIWIGO_GALLERY_UPLOAD_FLOW_TYPE = 'official.piwigo-gallery.upload.v1';
+export const PIWIGO_GALLERY_LINK_FLOW_TYPE = 'official.piwigo-gallery.link.v1';
+
+const GALLERY_LINK_DECISION_STEP_ID = 'decision';
+const DEFAULT_GALLERY_LINK_TIMEOUT_MINUTES = 10;
+const DEFAULT_PIWIGO_SITE_LABEL = 'Piwigo';
+
+const galleryLinkScopeOptionSchema = z.object({
+  scopeId: z.string().trim().min(1),
+  label: z.string().trim().min(1)
+}).strict();
+
+const galleryLinkFlowCopySchema = z.object({
+  question: z.string().trim().min(1),
+  accept: z.string().trim().min(1),
+  refuse: z.string().trim().min(1),
+  confirmed: z.string().trim().min(1),
+  scopeRequired: z.string().trim().min(1),
+  denied: z.string().trim().min(1),
+  failed: z.string().trim().min(1),
+  expired: z.string().trim().min(1)
+}).strict();
+
+const galleryLinkFlowRequestSchema = z.object({
+  version: z.literal(1),
+  requestId: z.string().trim().min(1).max(160),
+  requestToken: z.string().trim().min(1).max(512),
+  identityId: z.string().trim().min(1),
+  whatsappJid: z.string().trim().min(1),
+  username: z.string().trim().min(1).max(100),
+  siteLabel: z.string().trim().min(1).max(120),
+  linkChoiceCount: z.number().int().min(1),
+  scopeOptions: z.array(galleryLinkScopeOptionSchema).min(1),
+  expiresAt: z.string().datetime(),
+  copy: galleryLinkFlowCopySchema
+}).strict();
+
+const galleryLinkFlowDecisionSchema = z.enum(['approve', 'deny']);
+const galleryLinkTimeoutMinutesSchema = z.number().int().min(1).max(60);
+
+export type GalleryLinkFlowRequest = z.infer<typeof galleryLinkFlowRequestSchema>;
+export type GalleryLinkFlowDecision = z.infer<typeof galleryLinkFlowDecisionSchema>;
+export interface GalleryLinkFlowInitialData extends Record<string, unknown> {
+  linkRequest: GalleryLinkFlowRequest;
+}
+
+export interface GalleryLinkFlowInitialDataInput {
+  t: TranslateFn;
+  requestId: string;
+  requestToken: string;
+  identityId: string;
+  whatsappJid: string;
+  username: string;
+  siteLabel: string;
+  linkChoiceCount: number;
+  scopeOptions: ReadonlyArray<{ scopeId: string; label: string }>;
+  expiresAt: string | Date;
+}
+
+export function createGalleryLinkFlowDefinition(input: {
+  t: TranslateFn;
+  timeoutMinutes?: number | undefined;
+}): FlowDefinition {
+  const fallbackCopy = galleryLinkFlowCopy(input.t, {
+    username: '',
+    siteLabel: DEFAULT_PIWIGO_SITE_LABEL
+  });
+  const timeoutMinutes = galleryLinkTimeoutMinutesSchema.parse(
+    input.timeoutMinutes ?? DEFAULT_GALLERY_LINK_TIMEOUT_MINUTES
+  );
+  return {
+    flowType: PIWIGO_GALLERY_LINK_FLOW_TYPE,
+    t: input.t,
+    initialStepId: GALLERY_LINK_DECISION_STEP_ID,
+    context: 'private',
+    timeoutMinutes,
+    completionReply: false,
+    steps: {
+      [GALLERY_LINK_DECISION_STEP_ID]: {
+        id: GALLERY_LINK_DECISION_STEP_ID,
+        kind: 'choice',
+        prompt: fallbackCopy.question,
+        promptForState: (state) => galleryLinkFlowRequestFromData(state.data)?.copy.question
+          ?? fallbackCopy.question,
+        optionsForState: (state) => {
+          const copy = galleryLinkFlowRequestFromData(state.data)?.copy ?? fallbackCopy;
+          return [
+            { label: copy.accept, value: 'approve' },
+            { label: copy.refuse, value: 'deny' }
+          ];
+        },
+        minSelections: 1,
+        maxSelections: 1,
+        privateOnly: true
+      }
+    }
+  };
+}
+
+export function galleryLinkFlowInitialData(
+  input: GalleryLinkFlowInitialDataInput
+): GalleryLinkFlowInitialData {
+  const request = galleryLinkFlowRequestSchema.parse({
+    version: 1,
+    requestId: input.requestId,
+    requestToken: input.requestToken.toUpperCase(),
+    identityId: input.identityId,
+    whatsappJid: input.whatsappJid,
+    username: input.username,
+    siteLabel: input.siteLabel,
+    linkChoiceCount: input.linkChoiceCount,
+    scopeOptions: input.scopeOptions.map((scope) => ({ ...scope })),
+    expiresAt: input.expiresAt instanceof Date ? input.expiresAt.toISOString() : input.expiresAt,
+    copy: galleryLinkFlowCopy(input.t, {
+      username: input.username,
+      siteLabel: input.siteLabel
+    })
+  });
+  return { linkRequest: request };
+}
+
+export function galleryLinkFlowRequest(
+  snapshot: Pick<FlowSessionSnapshot, 'state'>
+): GalleryLinkFlowRequest | undefined {
+  return galleryLinkFlowRequestFromData(snapshot.state.data);
+}
+
+export function galleryLinkFlowDecision(
+  snapshot: Pick<FlowSessionSnapshot, 'state'>
+): GalleryLinkFlowDecision | undefined {
+  const value = snapshot.state.data[GALLERY_LINK_DECISION_STEP_ID];
+  if (!Array.isArray(value) || value.length !== 1) {
+    return undefined;
+  }
+  const parsed = galleryLinkFlowDecisionSchema.safeParse(value[0]);
+  return parsed.success ? parsed.data : undefined;
+}
+
+export function galleryLinkDecisionPurpose(): string {
+  return `flow.${PIWIGO_GALLERY_LINK_FLOW_TYPE}.${GALLERY_LINK_DECISION_STEP_ID}`;
+}
 
 interface GalleryFlowCopy {
   source?: string | undefined;
@@ -230,6 +371,29 @@ export function galleryFlowAnswers(snapshot: FlowSessionSnapshot): {
     return undefined;
   }
   return { onde, quando, withUserIds, albumSource };
+}
+
+function galleryLinkFlowRequestFromData(
+  data: Record<string, unknown>
+): GalleryLinkFlowRequest | undefined {
+  const parsed = galleryLinkFlowRequestSchema.safeParse(data.linkRequest);
+  return parsed.success ? parsed.data : undefined;
+}
+
+function galleryLinkFlowCopy(
+  t: TranslateFn,
+  input: { username: string; siteLabel: string }
+): GalleryLinkFlowRequest['copy'] {
+  return galleryLinkFlowCopySchema.parse({
+    question: t('official.piwigo-gallery.linkFlow.question', input),
+    accept: t('official.piwigo-gallery.linkFlow.accept'),
+    refuse: t('official.piwigo-gallery.linkFlow.refuse'),
+    confirmed: t('official.piwigo-gallery.linkFlow.confirmed', { username: input.username }),
+    scopeRequired: t('official.piwigo-gallery.linkFlow.scopeRequired', { siteLabel: input.siteLabel }),
+    denied: t('official.piwigo-gallery.linkFlow.denied'),
+    failed: t('official.piwigo-gallery.linkFlow.failed', { siteLabel: input.siteLabel }),
+    expired: t('official.piwigo-gallery.linkFlow.expired', { siteLabel: input.siteLabel })
+  });
 }
 
 function galleryFlowStateData(data: Record<string, unknown>): GalleryFlowStateData | undefined {

@@ -1,12 +1,10 @@
-import { timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
-import type { PluginDataStore } from '../../../platform/pluginRuntime/manager/pluginDataStore';
 import type {
   PluginDatabase,
   PluginDatabaseRegistry,
   PluginDatabaseRow
 } from '../../../platform/pluginRuntime/runtime/pluginDatabase';
-import type { GalleryConnection, PiwigoGalleryConfig } from './config';
+import type { GalleryConnection, GalleryConnectionDefaults, PiwigoGalleryConfig } from './config';
 import { configConnection } from './config';
 import { PIWIGO_GALLERY_DATABASE } from './manifest';
 import {
@@ -37,7 +35,9 @@ export interface GalleryUploadDraft {
   collectionChatId: string;
   actorWid: string;
   actorIdentityId: string;
-  piwigoLinkedWid?: string | undefined;
+  topomareUserId: string;
+  /** Immutable Piwigo shadow-user binding affirmed by central authorization. */
+  piwigoUserId: number;
   actorLabel: string;
   acceptedExtensions: string[];
   maxFileBytes: number;
@@ -90,7 +90,10 @@ export interface GalleryUploadBatch {
   collectionChatId: string;
   actorWid: string;
   actorIdentityId: string;
-  piwigoLinkedWid?: string | undefined;
+  /** Historical terminal rows may predate the atomic Topomare cutover. */
+  topomareUserId: string | null;
+  /** Historical terminal rows may predate the atomic Topomare cutover. */
+  piwigoUserId: number | null;
   actorLabel: string;
   onde: string;
   quando: string;
@@ -128,24 +131,13 @@ export interface StoredGalleryUploadBatch extends GalleryUploadBatch {
   version: number;
 }
 
-export type NewGalleryUploadBatch = GalleryUploadBatch;
-
-export interface GalleryScopeOption {
-  scopeId: string;
-  label: string;
-}
-
-export interface GalleryLinkRequest {
-  requestId: string;
-  requestToken: string;
-  identityId: string;
-  whatsappJid: string;
-  siteLabel: string;
-  linkChoiceCount: number;
-  scopeOptions: GalleryScopeOption[];
-  createdAt: string;
-  expiresAt: string;
-}
+export type NewGalleryUploadBatch = Omit<
+  GalleryUploadBatch,
+  'topomareUserId' | 'piwigoUserId'
+> & {
+  topomareUserId: string;
+  piwigoUserId: number;
+};
 
 export interface PiwigoAlbumAnnouncementFile {
   position?: number | undefined;
@@ -190,18 +182,6 @@ export interface StoredPiwigoAlbumAnnouncement extends PiwigoAlbumAnnouncement {
   version: number;
 }
 
-export interface GalleryRegistrationOtpRequest {
-  requestId: string;
-  identityId: string;
-  whatsappJid: string;
-  displayName?: string | undefined;
-  otpHash: string;
-  status?: 'active' | 'consumed' | 'locked' | 'expired' | undefined;
-  expiresAt: string;
-  attempts: number;
-  createdAt: string;
-}
-
 interface DraftRow extends PluginDatabaseRow {
   flow_session_id: string;
   flow_type: string;
@@ -212,7 +192,8 @@ interface DraftRow extends PluginDatabaseRow {
   collection_chat_id: string;
   actor_wid: string;
   actor_identity_id: string | null;
-  piwigo_linked_wid: string | null;
+  topomare_user_id: string | null;
+  piwigo_user_id: number | null;
   actor_label: string;
   accepted_extensions_json: string;
   max_file_bytes: number;
@@ -232,7 +213,8 @@ interface BatchRow extends PluginDatabaseRow {
   collection_chat_id: string;
   actor_wid: string;
   actor_identity_id: string | null;
-  piwigo_linked_wid: string | null;
+  topomare_user_id: string | null;
+  piwigo_user_id: number | null;
   actor_label: string;
   onde: string;
   quando: string;
@@ -285,23 +267,6 @@ interface BatchFileRow extends PluginDatabaseRow {
   cleanup_completed_at: string | null;
 }
 
-interface LinkRequestRow extends PluginDatabaseRow {
-  token_key: string;
-  request_token: string;
-  request_id: string;
-  identity_id: string;
-  whatsapp_jid: string;
-  site_label: string;
-  link_choice_count: number;
-  created_at: string;
-  expires_at: string;
-}
-
-interface LinkRequestScopeRow extends PluginDatabaseRow {
-  scope_id: string;
-  label: string;
-}
-
 interface AnnouncementRow extends PluginDatabaseRow {
   id: string;
   dedupe_key: string;
@@ -338,17 +303,6 @@ interface AnnouncementFileRow extends PluginDatabaseRow {
   delivered_at: string | null;
 }
 
-interface RegistrationOtpRow extends PluginDatabaseRow {
-  request_id: string;
-  identity_id: string;
-  whatsapp_jid: string;
-  display_name: string | null;
-  otp_hash: string;
-  expires_at: string;
-  attempts: number;
-  created_at: string;
-}
-
 export class GalleryStorageConflictError extends Error {
   constructor(message: string) {
     super(message);
@@ -371,12 +325,10 @@ export function galleryDatabase(registry: PluginDatabaseRegistry | undefined): P
 }
 
 export async function resolveGalleryConnection(
-  _store: PluginDataStore | PluginDatabase | undefined,
-  config?: PiwigoGalleryConfig | undefined,
-  defaultPiwigoBaseUrl?: string | undefined,
-  defaultPiwigoBotSecret?: string | undefined
+  config: PiwigoGalleryConfig,
+  defaults: GalleryConnectionDefaults
 ): Promise<GalleryConnection | undefined> {
-  return config ? configConnection(config, defaultPiwigoBaseUrl, defaultPiwigoBotSecret) : undefined;
+  return configConnection(config, defaults);
 }
 
 export function saveDraft(db: PluginDatabase, draft: GalleryUploadDraft): StoredGalleryUploadDraft {
@@ -390,12 +342,11 @@ export function saveDraft(db: PluginDatabase, draft: GalleryUploadDraft): Stored
       assertSameTarget(existing, { ...draft, collectionChatId }, 'gallery upload draft');
       const result = db.run(
         `UPDATE gallery_upload_drafts
-            SET flow_type = ?, piwigo_linked_wid = ?, actor_label = ?,
+            SET flow_type = ?, actor_label = ?,
                 accepted_extensions_json = ?, max_file_bytes = ?, auto_finalize_minutes = ?,
                 updated_at = ?, version = version + 1
           WHERE flow_session_id = ? AND scope_id = ? AND version = ?`,
         draft.flowType,
-        draft.piwigoLinkedWid ?? null,
         draft.actorLabel,
         JSON.stringify(uniqueStrings(draft.acceptedExtensions)),
         draft.maxFileBytes,
@@ -412,10 +363,10 @@ export function saveDraft(db: PluginDatabase, draft: GalleryUploadDraft): Stored
       db.run(
         `INSERT INTO gallery_upload_drafts (
           flow_session_id, flow_type, scope_id, group_id, group_wid, chat_id, collection_chat_id, actor_wid,
-          actor_identity_id, piwigo_linked_wid, actor_label,
+          actor_identity_id, topomare_user_id, piwigo_user_id, actor_label,
           accepted_extensions_json, max_file_bytes, auto_finalize_minutes,
           created_at, updated_at, version
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
         draft.flowSessionId,
         draft.flowType,
         draft.scopeId,
@@ -425,7 +376,8 @@ export function saveDraft(db: PluginDatabase, draft: GalleryUploadDraft): Stored
         collectionChatId,
         normalizeWid(draft.actorWid),
         actorIdentityId,
-        draft.piwigoLinkedWid ? normalizeWid(draft.piwigoLinkedWid) : null,
+        requireTopomareUserId(draft.topomareUserId),
+        requirePiwigoUserId(draft.piwigoUserId),
         draft.actorLabel,
         JSON.stringify(uniqueStrings(draft.acceptedExtensions)),
         draft.maxFileBytes,
@@ -472,6 +424,21 @@ export function createBatch(
 ): StoredGalleryUploadBatch {
   if (batch.status !== 'collecting') {
     throw new GalleryStorageInvariantError('New gallery upload batches must start in collecting state.');
+  }
+  for (const file of batch.files) {
+    if (
+      file.status !== 'staged' ||
+      file.uploadAttemptId !== undefined ||
+      file.uploadStartedAt !== undefined ||
+      file.imageId !== undefined ||
+      file.url !== undefined ||
+      file.uploadedAt !== undefined ||
+      file.failedAt !== undefined
+    ) {
+      throw new GalleryStorageInvariantError(
+        'New gallery upload batch files must start as unattempted staged media.'
+      );
+    }
   }
   assertExactTarget(batch.groupWid, batch.chatId);
   const actorIdentityId = requireActorIdentityId(batch);
@@ -782,6 +749,7 @@ export function beginBatchFileUpload(db: PluginDatabase, input: {
   attemptId: string;
   startedAt: string;
 }): BeginBatchFileUploadResult {
+  const attemptId = requireUploadAttemptId(input.attemptId);
   return db.transaction(() => {
     const batch = getBatch(db, input.scopeId, input.batchId);
     if (!batch) return { kind: 'missing' };
@@ -791,13 +759,20 @@ export function beginBatchFileUpload(db: PluginDatabase, input: {
     const file = batch.files.find((candidate) => candidate.messageId === input.messageId);
     if (!file) return { kind: 'file_missing', batch };
     if (file.status === 'uploaded') return { kind: 'already_uploaded', batch, file };
-    if (file.status === 'uploading') return { kind: 'already_uploading', batch, file };
+    if (file.status === 'uploading') {
+      if (file.uploadAttemptId !== attemptId) {
+        throw new GalleryStorageInvariantError(
+          `Gallery upload file ${input.messageId} already has a different durable v4 idempotency key.`
+        );
+      }
+      return { kind: 'already_uploading', batch, file };
+    }
     const updatedFile = db.run(
       `UPDATE gallery_upload_batch_files
           SET status = 'uploading', upload_attempt_id = ?, upload_started_at = ?,
               upload_retry_count = 0, upload_next_retry_at = NULL, upload_last_error = NULL
         WHERE batch_id = ? AND message_id = ? AND status = 'staged'`,
-      input.attemptId,
+      attemptId,
       input.startedAt,
       input.batchId,
       input.messageId
@@ -1339,76 +1314,6 @@ export function cancelBatch(db: PluginDatabase, input: {
   });
 }
 
-export function saveLinkRequest(db: PluginDatabase, request: GalleryLinkRequest): void {
-  const tokenKey = normalizedToken(request.requestToken);
-  const identityId = normalizeIdentityId(request.identityId);
-  const whatsappJid = normalizeWid(request.whatsappJid);
-  db.transaction(() => {
-    db.run(
-      `DELETE FROM gallery_link_requests
-        WHERE token_key = ? OR identity_id = ? OR whatsapp_jid = ?`,
-      tokenKey,
-      identityId,
-      whatsappJid
-    );
-    db.run(
-      `INSERT INTO gallery_link_requests (
-        token_key, request_token, request_id, identity_id, whatsapp_jid, site_label,
-        link_choice_count, created_at, expires_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      tokenKey,
-      request.requestToken,
-      request.requestId,
-      identityId,
-      whatsappJid,
-      request.siteLabel,
-      request.linkChoiceCount,
-      request.createdAt,
-      request.expiresAt
-    );
-    request.scopeOptions.forEach((scope, position) => {
-      db.run(
-        `INSERT INTO gallery_link_request_scopes (token_key, position, scope_id, label)
-         VALUES (?, ?, ?, ?)`,
-        tokenKey,
-        position,
-        scope.scopeId,
-        scope.label
-      );
-    });
-  });
-}
-
-export function getLinkRequest(db: PluginDatabase, requestToken: string): GalleryLinkRequest | undefined {
-  const row = db.get<LinkRequestRow>(
-    'SELECT * FROM gallery_link_requests WHERE token_key = ?',
-    normalizedToken(requestToken)
-  );
-  return row ? linkRequestFromRow(db, row) : undefined;
-}
-
-export function getLinkRequestForIdentity(
-  db: PluginDatabase,
-  identityId: string
-): GalleryLinkRequest | undefined {
-  const row = db.get<LinkRequestRow>(
-    'SELECT * FROM gallery_link_requests WHERE identity_id = ?',
-    normalizeIdentityId(identityId)
-  );
-  return row ? linkRequestFromRow(db, row) : undefined;
-}
-
-export function deleteLinkRequest(db: PluginDatabase, requestToken: string): number {
-  return db.run(
-    'DELETE FROM gallery_link_requests WHERE token_key = ?',
-    normalizedToken(requestToken)
-  ).changes;
-}
-
-export function pruneExpiredLinkRequests(db: PluginDatabase, now: string): number {
-  return db.run('DELETE FROM gallery_link_requests WHERE expires_at <= ?', now).changes;
-}
-
 export function saveAlbumAnnouncement(
   db: PluginDatabase,
   announcement: PiwigoAlbumAnnouncement,
@@ -1885,177 +1790,6 @@ export function completeAlbumAnnouncement(db: PluginDatabase, input: {
   });
 }
 
-export function saveRegistrationOtp(db: PluginDatabase, request: GalleryRegistrationOtpRequest): boolean {
-  return db.run(
-    `INSERT INTO gallery_registration_otps (
-      request_id, identity_id, whatsapp_jid, display_name, otp_hash, expires_at, attempts, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(request_id) DO NOTHING`,
-    request.requestId,
-    normalizeIdentityId(request.identityId),
-    normalizeWid(request.whatsappJid),
-    request.displayName ?? null,
-    request.otpHash,
-    request.expiresAt,
-    request.attempts,
-    request.createdAt
-  ).changes === 1;
-}
-
-export function getRegistrationOtp(
-  db: PluginDatabase,
-  requestId: string
-): GalleryRegistrationOtpRequest | undefined {
-  const row = db.get<RegistrationOtpRow>(
-    'SELECT * FROM gallery_registration_otps WHERE request_id = ?',
-    requestId
-  );
-  return row ? registrationOtpFromRow(row) : undefined;
-}
-
-export function deleteRegistrationOtp(db: PluginDatabase, requestId: string): number {
-  return db.run('DELETE FROM gallery_registration_otps WHERE request_id = ?', requestId).changes;
-}
-
-export type ConsumeRegistrationOtpResult =
-  | { kind: 'verified'; request: GalleryRegistrationOtpRequest }
-  | { kind: 'invalid'; attempts: number; locked: boolean }
-  | { kind: 'consumed' }
-  | { kind: 'locked' }
-  | { kind: 'expired' }
-  | { kind: 'missing' };
-
-const REGISTRATION_OTP_TERMINAL_HASHES = {
-  consumed: '!piwigo-registration-otp:consumed',
-  locked: '!piwigo-registration-otp:locked',
-  expired: '!piwigo-registration-otp:expired'
-} as const;
-
-export function consumeRegistrationOtp(db: PluginDatabase, input: {
-  requestId: string;
-  candidateHash: string;
-  now: string;
-  maxAttempts: number;
-}): ConsumeRegistrationOtpResult {
-  return db.transaction(() => {
-    const request = getRegistrationOtp(db, input.requestId);
-    if (!request) return { kind: 'missing' };
-    if (request.status === 'consumed') return { kind: 'consumed' };
-    if (request.status === 'locked') return { kind: 'locked' };
-    if (request.status === 'expired') return { kind: 'expired' };
-    if (request.expiresAt <= input.now) {
-      db.run(
-        'UPDATE gallery_registration_otps SET otp_hash = ? WHERE request_id = ?',
-        REGISTRATION_OTP_TERMINAL_HASHES.expired,
-        input.requestId
-      );
-      return { kind: 'expired' };
-    }
-    if (safeHashEqual(request.otpHash, input.candidateHash)) {
-      db.run(
-        'UPDATE gallery_registration_otps SET otp_hash = ? WHERE request_id = ?',
-        REGISTRATION_OTP_TERMINAL_HASHES.consumed,
-        input.requestId
-      );
-      return { kind: 'verified', request };
-    }
-    const attempts = request.attempts + 1;
-    const locked = attempts >= input.maxAttempts;
-    if (locked) {
-      db.run(
-        'UPDATE gallery_registration_otps SET attempts = ?, otp_hash = ? WHERE request_id = ?',
-        attempts,
-        REGISTRATION_OTP_TERMINAL_HASHES.locked,
-        input.requestId
-      );
-    } else {
-      db.run(
-        'UPDATE gallery_registration_otps SET attempts = ? WHERE request_id = ?',
-        attempts,
-        input.requestId
-      );
-    }
-    return { kind: 'invalid', attempts, locked };
-  });
-}
-
-export function pruneExpiredRegistrationOtps(db: PluginDatabase, now: string): number {
-  return db.run(
-    `UPDATE gallery_registration_otps
-        SET otp_hash = ?
-      WHERE expires_at <= ?
-        AND otp_hash NOT IN (?, ?, ?)`,
-    REGISTRATION_OTP_TERMINAL_HASHES.expired,
-    now,
-    REGISTRATION_OTP_TERMINAL_HASHES.consumed,
-    REGISTRATION_OTP_TERMINAL_HASHES.locked,
-    REGISTRATION_OTP_TERMINAL_HASHES.expired
-  ).changes;
-}
-
-export interface LegacyPluginDataRecord {
-  id?: string | undefined;
-  scopeId?: string | null | undefined;
-  key: string;
-  valueJson: unknown;
-}
-
-export interface LegacyGalleryImportResult {
-  importedRecordIds: string[];
-  alreadyImportedRecordIds: string[];
-  skipped: Array<{ recordId: string; key: string; reason: string }>;
-}
-
-/**
- * Idempotently copies explicit legacy PluginDataRecord rows into SQLite.
- *
- * The caller owns account filtering and intentionally supplies rows because the legacy
- * PluginDataStore API cannot enumerate prefixes. Imported rows are not deleted here;
- * callers may delete only importedRecordIds after every account that owns them is migrated.
- */
-export function importLegacyPiwigoGalleryRecords(
-  db: PluginDatabase,
-  records: readonly LegacyPluginDataRecord[],
-  importedAt = new Date().toISOString()
-): LegacyGalleryImportResult {
-  const result: LegacyGalleryImportResult = {
-    importedRecordIds: [],
-    alreadyImportedRecordIds: [],
-    skipped: []
-  };
-  const ordered = [...records].sort((left, right) => legacyImportPriority(left.key) - legacyImportPriority(right.key));
-  for (const row of ordered) {
-    const recordId = row.id?.trim() || `${row.scopeId ?? '__global__'}:${row.key}`;
-    if (db.get('SELECT record_id FROM gallery_legacy_imports WHERE record_id = ?', recordId)) {
-      result.alreadyImportedRecordIds.push(recordId);
-      continue;
-    }
-    try {
-      const imported = importLegacyRecord(db, row, importedAt);
-      if (!imported) {
-        result.skipped.push({ recordId, key: row.key, reason: 'unsupported legacy key or invalid value' });
-        continue;
-      }
-      db.run(
-        `INSERT OR IGNORE INTO gallery_legacy_imports (record_id, record_key, scope_id, imported_at)
-         VALUES (?, ?, ?, ?)`,
-        recordId,
-        row.key,
-        row.scopeId ?? null,
-        importedAt
-      );
-      result.importedRecordIds.push(recordId);
-    } catch (error) {
-      result.skipped.push({
-        recordId,
-        key: row.key,
-        reason: error instanceof Error ? error.message : String(error)
-      });
-    }
-  }
-  return result;
-}
-
 function insertBatch(db: PluginDatabase, batch: GalleryUploadBatch): void {
   const deadlineGeneration = batch.deadlineGeneration ?? 1;
   const version = batch.version ?? 1;
@@ -2063,13 +1797,13 @@ function insertBatch(db: PluginDatabase, batch: GalleryUploadBatch): void {
   db.run(
     `INSERT INTO gallery_upload_batches (
       id, status, scope_id, group_id, group_wid, chat_id, collection_chat_id, actor_wid,
-      actor_identity_id, piwigo_linked_wid, actor_label, onde, quando, with_user_ids_json,
+      actor_identity_id, topomare_user_id, piwigo_user_id, actor_label, onde, quando, with_user_ids_json,
       source_kind, source_ref, source_snapshot_json,
       accepted_extensions_json, max_file_bytes, auto_finalize_minutes, created_at, updated_at,
       auto_finalize_at, last_accepted_at, deadline_generation, version,
       finalization_claim_id, finalization_claimed_at, finalization_claim_expires_at,
       album_label, error
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     batch.id,
     batch.status,
     batch.scopeId,
@@ -2079,7 +1813,8 @@ function insertBatch(db: PluginDatabase, batch: GalleryUploadBatch): void {
     collectionChatId,
     normalizeWid(batch.actorWid),
     normalizeIdentityId(batch.actorIdentityId),
-    batch.piwigoLinkedWid ? normalizeWid(batch.piwigoLinkedWid) : null,
+    requireTopomareUserId(batch.topomareUserId),
+    requirePiwigoUserId(batch.piwigoUserId),
     batch.actorLabel,
     batch.onde,
     batch.quando,
@@ -2125,9 +1860,9 @@ function insertBatchFile(db: PluginDatabase, batchId: string, file: GalleryBatch
     file.imageId ?? null,
     file.url ?? null,
     acceptedAt,
-    file.uploadAttemptId ?? (file.status === 'uploaded' ? `legacy:${batchId}:${file.messageId}` : null),
-    file.uploadStartedAt ?? (file.status === 'uploaded' ? file.uploadedAt ?? acceptedAt : null),
-    file.uploadedAt ?? (file.status === 'uploaded' ? acceptedAt : null),
+    file.uploadAttemptId ?? null,
+    file.uploadStartedAt ?? null,
+    file.uploadedAt ?? null,
     file.uploadRetryCount ?? 0,
     file.uploadNextRetryAt ?? null,
     file.uploadLastError ?? null,
@@ -2149,7 +1884,8 @@ function draftFromRow(row: DraftRow): StoredGalleryUploadDraft {
     collectionChatId: row.collection_chat_id,
     actorWid: row.actor_wid,
     actorIdentityId: normalizeIdentityId(row.actor_identity_id),
-    ...(row.piwigo_linked_wid ? { piwigoLinkedWid: row.piwigo_linked_wid } : {}),
+    topomareUserId: requireTopomareUserId(row.topomare_user_id),
+    piwigoUserId: requirePiwigoUserId(row.piwigo_user_id),
     actorLabel: row.actor_label,
     acceptedExtensions: parseJsonArray(row.accepted_extensions_json, z.string()),
     maxFileBytes: row.max_file_bytes,
@@ -2161,6 +1897,17 @@ function draftFromRow(row: DraftRow): StoredGalleryUploadDraft {
 }
 
 function batchFromRow(db: PluginDatabase, row: BatchRow): StoredGalleryUploadBatch {
+  const topomareUserId = row.topomare_user_id === null
+    ? null
+    : requireTopomareUserId(row.topomare_user_id);
+  const piwigoUserId = row.piwigo_user_id === null
+    ? null
+    : requirePiwigoUserId(row.piwigo_user_id);
+  if ((topomareUserId === null || piwigoUserId === null) && !isTerminalBatchStatus(row.status)) {
+    throw new GalleryStorageInvariantError(
+      `Nonterminal gallery upload ${row.id} is missing its immutable Topomare/Piwigo subject binding.`
+    );
+  }
   const files = db.all<BatchFileRow>(
     `SELECT * FROM gallery_upload_batch_files
       WHERE batch_id = ? ORDER BY accepted_at ASC, message_id ASC`,
@@ -2176,7 +1923,8 @@ function batchFromRow(db: PluginDatabase, row: BatchRow): StoredGalleryUploadBat
     collectionChatId: row.collection_chat_id,
     actorWid: row.actor_wid,
     actorIdentityId: normalizeIdentityId(row.actor_identity_id),
-    ...(row.piwigo_linked_wid ? { piwigoLinkedWid: row.piwigo_linked_wid } : {}),
+    topomareUserId,
+    piwigoUserId,
     actorLabel: row.actor_label,
     onde: row.onde,
     quando: row.quando,
@@ -2246,25 +1994,6 @@ function batchFileFromRow(row: BatchFileRow): GalleryBatchFile {
   };
 }
 
-function linkRequestFromRow(db: PluginDatabase, row: LinkRequestRow): GalleryLinkRequest {
-  const scopeOptions = db.all<LinkRequestScopeRow>(
-    `SELECT scope_id, label FROM gallery_link_request_scopes
-      WHERE token_key = ? ORDER BY position`,
-    row.token_key
-  ).map((scope) => ({ scopeId: scope.scope_id, label: scope.label }));
-  return {
-    requestId: row.request_id,
-    requestToken: row.request_token,
-    identityId: row.identity_id,
-    whatsappJid: row.whatsapp_jid,
-    siteLabel: row.site_label,
-    linkChoiceCount: row.link_choice_count,
-    scopeOptions,
-    createdAt: row.created_at,
-    expiresAt: row.expires_at
-  };
-}
-
 function announcementFromRow(db: PluginDatabase, row: AnnouncementRow): StoredPiwigoAlbumAnnouncement {
   const files = db.all<AnnouncementFileRow>(
     `SELECT position, image_id, file_id, download_token, sha256, filename, mime_type,
@@ -2306,27 +2035,6 @@ function announcementFromRow(db: PluginDatabase, row: AnnouncementRow): StoredPi
     ...(row.download_next_retry_at ? { downloadNextRetryAt: row.download_next_retry_at } : {}),
     ...(row.download_last_error ? { downloadLastError: row.download_last_error } : {}),
     version: row.version
-  };
-}
-
-function registrationOtpFromRow(row: RegistrationOtpRow): GalleryRegistrationOtpRequest {
-  const status = row.otp_hash === REGISTRATION_OTP_TERMINAL_HASHES.consumed
-    ? 'consumed'
-    : row.otp_hash === REGISTRATION_OTP_TERMINAL_HASHES.locked
-      ? 'locked'
-      : row.otp_hash === REGISTRATION_OTP_TERMINAL_HASHES.expired
-        ? 'expired'
-        : 'active';
-  return {
-    requestId: row.request_id,
-    identityId: normalizeIdentityId(row.identity_id),
-    whatsappJid: normalizeWid(row.whatsapp_jid),
-    ...(row.display_name ? { displayName: row.display_name } : {}),
-    otpHash: row.otp_hash,
-    status,
-    expiresAt: row.expires_at,
-    attempts: row.attempts,
-    createdAt: row.created_at
   };
 }
 
@@ -2440,8 +2148,8 @@ function normalizeAnnouncementGroupWid(groupWid: string): string {
 }
 
 function assertSameTarget(
-  existing: Pick<GalleryUploadDraft, 'scopeId' | 'groupId' | 'groupWid' | 'chatId' | 'collectionChatId' | 'actorIdentityId'>,
-  replacement: Pick<GalleryUploadDraft, 'scopeId' | 'groupId' | 'groupWid' | 'chatId' | 'collectionChatId' | 'actorIdentityId'>,
+  existing: Pick<GalleryUploadDraft, 'scopeId' | 'groupId' | 'groupWid' | 'chatId' | 'collectionChatId' | 'actorIdentityId' | 'topomareUserId' | 'piwigoUserId'>,
+  replacement: Pick<GalleryUploadDraft, 'scopeId' | 'groupId' | 'groupWid' | 'chatId' | 'collectionChatId' | 'actorIdentityId' | 'topomareUserId' | 'piwigoUserId'>,
   label: string
 ): void {
   if (
@@ -2451,7 +2159,10 @@ function assertSameTarget(
     normalizeWid(existing.chatId) !== normalizeWid(replacement.chatId) ||
     normalizeCollectionChatId(existing.collectionChatId) !==
       normalizeCollectionChatId(replacement.collectionChatId) ||
-    existing.actorIdentityId !== replacement.actorIdentityId
+    existing.actorIdentityId !== replacement.actorIdentityId ||
+    requireTopomareUserId(existing.topomareUserId) !==
+      requireTopomareUserId(replacement.topomareUserId) ||
+    requirePiwigoUserId(existing.piwigoUserId) !== requirePiwigoUserId(replacement.piwigoUserId)
   ) {
     throw new GalleryStorageInvariantError(`${label} target cannot be changed after capture.`);
   }
@@ -2482,12 +2193,40 @@ function normalizeIdentityId(identityId: string | null | undefined): string {
   return normalized;
 }
 
-function normalizeWid(wid: string): string {
-  return wid.trim().toLowerCase();
+function requireTopomareUserId(topomareUserId: string | null | undefined): string {
+  const parsed = z.string().uuid().safeParse(topomareUserId?.trim());
+  if (!parsed.success || parsed.data !== parsed.data.toLowerCase()) {
+    throw new GalleryStorageInvariantError(
+      'Gallery upload ownership requires a canonical lowercase Topomare user UUID.'
+    );
+  }
+  return parsed.data;
 }
 
-function normalizedToken(token: string): string {
-  return token.trim().toUpperCase();
+function requirePiwigoUserId(piwigoUserId: number | null | undefined): number {
+  if (!Number.isSafeInteger(piwigoUserId) || (piwigoUserId ?? 0) <= 0) {
+    throw new GalleryStorageInvariantError(
+      'Gallery upload ownership requires a positive immutable Piwigo user ID.'
+    );
+  }
+  return piwigoUserId as number;
+}
+
+function requireUploadAttemptId(attemptId: string): string {
+  const normalized = attemptId.trim();
+  if (
+    normalized !== attemptId
+    || !/^v4:[A-Za-z0-9][A-Za-z0-9._:-]{12,123}$/u.test(normalized)
+  ) {
+    throw new GalleryStorageInvariantError(
+      'Gallery upload files require one canonical v4 Piwigo idempotency key.'
+    );
+  }
+  return normalized;
+}
+
+function normalizeWid(wid: string): string {
+  return wid.trim().toLowerCase();
 }
 
 function uniqueWids(wids: string[]): string[] {
@@ -2504,89 +2243,4 @@ function uniqueNumbers(values: number[]): number[] {
 
 function parseJsonArray<T>(json: string, item: z.ZodType<T>): T[] {
   return z.array(item).parse(JSON.parse(json));
-}
-
-function safeHashEqual(expected: string, actual: string): boolean {
-  const expectedBuffer = Buffer.from(expected);
-  const actualBuffer = Buffer.from(actual);
-  return expectedBuffer.length === actualBuffer.length && timingSafeEqual(expectedBuffer, actualBuffer);
-}
-
-const legacyAnnouncementSchema = z.object({
-  id: z.string().min(1),
-  dedupeKey: z.string().min(1),
-  scopeId: z.string().min(1),
-  albumId: z.string().optional(),
-  albumName: z.string(),
-  siteLabel: z.string(),
-  userDisplayName: z.string(),
-  files: z.array(z.object({
-    imageId: z.number().int().positive(),
-    sha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
-    filename: z.string().min(1),
-    mimeType: z.string().min(1)
-  }).passthrough()),
-  observedAt: z.string().min(1),
-  announceAt: z.string().min(1),
-  status: z.enum(['pending', 'announced', 'skipped', 'failed']),
-  error: z.string().optional(),
-  announcedAt: z.string().optional()
-}).passthrough();
-
-function importLegacyRecord(db: PluginDatabase, row: LegacyPluginDataRecord, importedAt: string): boolean {
-  if (
-    row.key.startsWith('upload-draft:')
-    || row.key.startsWith('upload-batch:')
-    || row.key.startsWith('active-upload:')
-  ) {
-    // Legacy upload ownership was keyed by mutable WhatsApp aliases, so it cannot
-    // be upgraded safely to a durable identity. Consume the record without
-    // recreating an active draft, batch, or ownership claim.
-    return true;
-  }
-  if (
-    row.key.startsWith('link-request:')
-    || row.key.startsWith('link-request-wid:')
-    || row.key.startsWith('link-request-phone:')
-  ) {
-    // Legacy link requests do not contain a durable identity ID. Consume them
-    // without recreating authorization state keyed by mutable WhatsApp aliases.
-    return true;
-  }
-  if (row.key.startsWith('album-announcement:') && !row.key.startsWith('album-announcement-dedupe:')) {
-    const parsed = legacyAnnouncementSchema.safeParse(row.valueJson);
-    if (!parsed.success || !legacyScopeMatches(row, parsed.data.scopeId)) return false;
-    if (parsed.data.files.some((file) => file.sha256 === undefined)) {
-      // Pre-digest announcement media cannot be verified. Consume the legacy
-      // record without recreating a pending delivery that could fetch mutable bytes.
-      return true;
-    }
-    if (!getAlbumAnnouncement(db, parsed.data.scopeId, parsed.data.id)) saveAlbumAnnouncement(db, parsed.data);
-    return true;
-  }
-  if (row.key.startsWith('registration-otp:')) {
-    // Legacy OTP ownership was keyed by a mutable WhatsApp address. Consume
-    // the short-lived record without recreating authentication state.
-    return true;
-  }
-  if (row.key.startsWith('album-announcement-dedupe:')) {
-    const scopeId = row.scopeId ?? undefined;
-    const index = z.object({ announcementId: z.string().min(1) }).safeParse(row.valueJson);
-    return Boolean(scopeId && index.success && getAlbumAnnouncement(db, scopeId, index.data.announcementId));
-  }
-  return false;
-}
-
-function legacyImportPriority(key: string): number {
-  if (key.startsWith('upload-batch:')) return 10;
-  if (key.startsWith('upload-draft:')) return 20;
-  if (key.startsWith('link-request:') && !key.startsWith('link-request-wid:') && !key.startsWith('link-request-phone:')) return 30;
-  if (key.startsWith('album-announcement:') && !key.startsWith('album-announcement-dedupe:')) return 40;
-  if (key.startsWith('registration-otp:')) return 50;
-  if (key.startsWith('active-upload:')) return 90;
-  return 100;
-}
-
-function legacyScopeMatches(row: LegacyPluginDataRecord, valueScopeId: string): boolean {
-  return row.scopeId === undefined || row.scopeId === null || row.scopeId === valueScopeId;
 }

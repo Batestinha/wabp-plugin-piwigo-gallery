@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import type { FlowEngine } from '../../../adminBot/flows/flowEngine';
-import type { PluginDataStore } from '../../../platform/pluginRuntime/manager/pluginDataStore';
 import type {
   PluginDatabase,
   PluginDatabaseRow,
@@ -8,29 +7,17 @@ import type {
 } from '../../../platform/pluginRuntime/runtime/pluginDatabase';
 import {
   galleryDatabase,
-  importLegacyPiwigoGalleryRecords,
   deleteDraft,
-  listDrafts,
-  type LegacyGalleryImportResult
+  listDrafts
 } from './store';
 import {
   PIWIGO_GALLERY_ANNOUNCE_NEW_ALBUM_JOB,
   PIWIGO_GALLERY_FINALIZE_JOB
 } from './manifest';
 
-const preparations = new Map<string, Promise<LegacyGalleryImportResult>>();
 const runtimePreparations = new Map<string, Promise<PluginDatabase>>();
-const LEGACY_GALLERY_KEY_PREFIXES = [
-  'upload-draft:',
-  'upload-batch:',
-  'active-upload:',
-  'link-request:',
-  'link-request-wid:',
-  'link-request-phone:',
-  'album-announcement:',
-  'album-announcement-dedupe:',
-  'registration-otp:'
-] as const;
+const verifiedSubjectCutoverSchemas = new Set<string>();
+const SUBJECT_CUTOVER_MIGRATION = '011_topomare_subject_cutover.sql';
 
 export interface GalleryFinalizationRecoveryJob {
   jobName: typeof PIWIGO_GALLERY_FINALIZE_JOB;
@@ -99,35 +86,63 @@ interface RecoverableAnnouncementRow extends PluginDatabaseRow {
 }
 
 export async function preparedGalleryDatabase(
-  dataStore: PluginDataStore,
   databases: PluginDatabaseRegistry | undefined
 ): Promise<PluginDatabase> {
   const database = galleryDatabase(databases);
-  let preparation = preparations.get(database.filePath);
-  if (!preparation) {
-    preparation = legacyGalleryRecordsForAccount(dataStore).then((records) =>
-      importLegacyPiwigoGalleryRecords(database, records)
-    );
-    preparations.set(database.filePath, preparation);
-  }
-  try {
-    await preparation;
-  } catch (error) {
-    preparations.delete(database.filePath);
-    throw error;
-  }
+  assertGallerySubjectCutoverSchema(database);
   return database;
 }
 
+/** New-only runtime gate: schema 010 and mixed legacy/subject stores never run. */
+export function assertGallerySubjectCutoverSchema(database: PluginDatabase): void {
+  if (verifiedSubjectCutoverSchemas.has(database.filePath)) {
+    return;
+  }
+  const migration = database.get<{ name: string }>(
+    'SELECT name FROM _plugin_database_migrations WHERE name = ?',
+    SUBJECT_CUTOVER_MIGRATION
+  );
+  const legacyTables = database.all<{ name: string }>(
+    `SELECT name FROM sqlite_schema
+      WHERE type = 'table' AND name IN (
+        'gallery_link_requests',
+        'gallery_link_request_scopes',
+        'gallery_registration_otps',
+        'gallery_legacy_imports'
+      )`
+  );
+  const draftColumns = new Set(
+    database.all<{ name: string }>('PRAGMA table_info(gallery_upload_drafts)')
+      .map((column) => column.name)
+  );
+  const batchColumns = new Set(
+    database.all<{ name: string }>('PRAGMA table_info(gallery_upload_batches)')
+      .map((column) => column.name)
+  );
+  if (
+    migration?.name !== SUBJECT_CUTOVER_MIGRATION
+    || legacyTables.length !== 0
+    || !draftColumns.has('topomare_user_id')
+    || !draftColumns.has('piwigo_user_id')
+    || draftColumns.has('piwigo_linked_wid')
+    || !batchColumns.has('topomare_user_id')
+    || !batchColumns.has('piwigo_user_id')
+    || batchColumns.has('piwigo_linked_wid')
+  ) {
+    throw new Error(
+      'official.piwigo-gallery refuses startup unless its account store is exactly on the no-shim subject-cutover schema.'
+    );
+  }
+  verifiedSubjectCutoverSchemas.add(database.filePath);
+}
+
 /**
- * Performs the one-time account-aware legacy import and recreates durable
- * finalization and album-announcement jobs that may have been lost while the
- * runtime was stopped.
+ * Recreates durable finalization and album-announcement jobs that may have
+ * been lost while the runtime was stopped.
  * Hook registration should keep and await the returned promise before handling
  * its first event.
  */
 export async function prepareAndReconcileGalleryDatabase(
-  dataStore: PluginDataStore,
   databases: PluginDatabaseRegistry | undefined,
   options: GalleryRuntimePreparationOptions
 ): Promise<PluginDatabase> {
@@ -135,7 +150,7 @@ export async function prepareAndReconcileGalleryDatabase(
   let preparation = runtimePreparations.get(database.filePath);
   if (!preparation) {
     preparation = (async () => {
-      const prepared = await preparedGalleryDatabase(dataStore, databases);
+      const prepared = await preparedGalleryDatabase(databases);
       await reconcileGalleryFinalizationJobs(prepared, options);
       await reconcileGalleryAnnouncementJobs(prepared, options);
       return prepared;
@@ -259,56 +274,6 @@ export async function reconcileGalleryUploadDrafts(
   return result;
 }
 
-async function legacyGalleryRecordsForAccount(dataStore: PluginDataStore) {
-  const [records, accountScopeIds] = await Promise.all([
-    dataStore.list(),
-    dataStore.accountScopeIds?.() ?? Promise.resolve(undefined)
-  ]);
-  const legacyRecords = records.filter((record) =>
-    LEGACY_GALLERY_KEY_PREFIXES.some((prefix) => record.key.startsWith(prefix))
-  );
-  if (accountScopeIds === undefined) {
-    return legacyRecords;
-  }
-  const ownedScopeIds = new Set(accountScopeIds);
-  return legacyRecords.flatMap((record) => {
-    if (record.scopeId) {
-      return ownedScopeIds.has(record.scopeId) ? [record] : [];
-    }
-    if (record.key.startsWith('registration-otp:')) {
-      return [];
-    }
-    if (isPrimaryLinkRequestKey(record.key)) {
-      const value = objectValue(record.valueJson);
-      const scopeOptions = Array.isArray(value?.scopeOptions)
-        ? value.scopeOptions.filter((option) => {
-            const candidate = objectValue(option);
-            return typeof candidate?.scopeId === 'string' && ownedScopeIds.has(candidate.scopeId);
-          })
-        : [];
-      if (!value || scopeOptions.length === 0) {
-        return [];
-      }
-      return [{
-        ...record,
-        valueJson: {
-          ...value,
-          scopeOptions,
-          linkChoiceCount: new Set(scopeOptions.flatMap((option) => {
-            const candidate = objectValue(option);
-            return typeof candidate?.scopeId === 'string' ? [candidate.scopeId] : [];
-          })).size
-        }
-      }];
-    }
-    if (record.key.startsWith('link-request-wid:') || record.key.startsWith('link-request-phone:')) {
-      return [record];
-    }
-    const valueScopeId = objectValue(record.valueJson)?.scopeId;
-    return typeof valueScopeId === 'string' && ownedScopeIds.has(valueScopeId) ? [record] : [];
-  });
-}
-
 function recoveryRunAt(row: RecoverableBatchRow, now: Date): Date {
   if (row.status !== 'collecting' && row.status !== 'finalizing') {
     return now;
@@ -356,16 +321,4 @@ function announcementRecoveryDedupeKey(row: RecoverableAnnouncementRow, startupA
 function validTimestamp(value: string): number {
   const timestamp = Date.parse(value);
   return Number.isFinite(timestamp) ? timestamp : 0;
-}
-
-function isPrimaryLinkRequestKey(key: string): boolean {
-  return key.startsWith('link-request:') &&
-    !key.startsWith('link-request-wid:') &&
-    !key.startsWith('link-request-phone:');
-}
-
-function objectValue(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : undefined;
 }

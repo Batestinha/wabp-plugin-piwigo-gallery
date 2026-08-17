@@ -7,6 +7,9 @@ export const PIWIGO_GALLERY_DATABASE = 'gallery';
 export const PIWIGO_GALLERY_FINALIZE_JOB = 'piwigo-gallery.finalize';
 export const PIWIGO_GALLERY_ANNOUNCE_NEW_ALBUM_JOB = 'piwigo-gallery.announce-new-album';
 export const PIWIGO_GALLERY_MEDIA_DUMP_HINT_JOB = 'piwigo-gallery.media-dump-hint';
+export const PIWIGO_GALLERY_SUBJECT_CUTOVER_MIGRATION = '011_topomare_subject_cutover.sql';
+export const PIWIGO_GALLERY_SUBJECT_CUTOVER_APPROVAL =
+  `${PIWIGO_GALLERY_DATABASE}:${PIWIGO_GALLERY_SUBJECT_CUTOVER_MIGRATION}`;
 
 export const PIWIGO_GALLERY_EXTERNAL_ACTIONS = {
   albumUploadObserved: 'piwigo.albumUploadObserved'
@@ -21,13 +24,14 @@ export const piwigoGalleryDatabases = [{
   name: PIWIGO_GALLERY_DATABASE,
   engine: 'sqlite' as const,
   scope: 'account' as const,
-  migrations: 'migrations/gallery'
+  migrations: 'migrations/gallery',
+  operatorMigrations: [PIWIGO_GALLERY_SUBJECT_CUTOVER_MIGRATION]
 }];
 
 export const piwigoGalleryManifest: PluginManifest = {
   pluginId: PIWIGO_GALLERY_PLUGIN_ID,
   kind: 'managed_group',
-  version: '0.16.0',
+  version: '0.17.0',
   coreApiRange: '>=0.2.0',
   messageNamespace: 'official.piwigo-gallery',
   descriptionKey: 'official.piwigo-gallery.description',
@@ -95,7 +99,7 @@ export const piwigoGalleryManifest: PluginManifest = {
       description: 'Observe a scoped Piwigo album upload and schedule its WhatsApp announcement.'
   }],
   databases: piwigoGalleryDatabases,
-  dataVersion: '10',
+  dataVersion: '11',
   dependencies: [
     { pluginId: 'official.community-events', versionRange: '>=0.5.0', optional: true }
   ],
@@ -132,7 +136,7 @@ export const piwigoGalleryManifest: PluginManifest = {
     ],
     prerequisites: [
       'enabled=true in the target scope.',
-      'The deployment must provide the internal Piwigo base URL and shared bot secret before uploads can start.',
+      'The deployment must provide the public HTTPS Piwigo URL and the file-backed Topomare OIDC service identity before uploads can start.',
       'Upload users need the scoped piwigo-gallery.upload permission.'
     ],
     workflows: [

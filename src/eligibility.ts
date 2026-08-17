@@ -10,6 +10,7 @@ import {
   configConnection,
   parsePiwigoGalleryConfig,
   type GalleryConnection,
+  type GalleryConnectionDefaults,
   type PiwigoGalleryConfig
 } from './config';
 import { PIWIGO_GALLERY_PLUGIN_ID } from './manifest';
@@ -83,7 +84,6 @@ export interface ConfiguredPiwigoGalleryScope {
   groupId: string;
   groupWid: string;
   managementMode?: 'OBSERVE' | 'ASSIST' | 'MANAGE' | undefined;
-  linkChoiceKey: string;
   /** Human-readable logical gallery/scope label, independent of a physical child group. */
   scopeLabel?: string | undefined;
   label: string;
@@ -91,19 +91,13 @@ export interface ConfiguredPiwigoGalleryScope {
   connection: GalleryConnection;
 }
 
-export function linkChoiceCountForScopes(scopes: ConfiguredPiwigoGalleryScope[]): number {
-  return new Set(scopes.map((scope) => scope.linkChoiceKey)).size;
-}
-
 export async function listConfiguredPiwigoGalleryEligibleScopes(
   identityId: string,
-  input: {
+  input: GalleryConnectionDefaults & {
     db?: PrismaClient | undefined;
     whatsAppAccountId?: string | undefined;
     runtimeBindingId?: string | undefined;
-    defaultPiwigoBaseUrl?: string | undefined;
-    defaultPiwigoBotSecret?: string | undefined;
-  } = {}
+  }
 ): Promise<ConfiguredPiwigoGalleryScope[]> {
   const db = input.db ?? prisma;
   const whatsAppAccountId = input.whatsAppAccountId ?? resolveWhatsAppAccountId();
@@ -155,8 +149,7 @@ export async function listConfiguredPiwigoGalleryEligibleScopes(
         scopeResolver,
         db,
         whatsAppAccountId,
-        input.defaultPiwigoBaseUrl,
-        input.defaultPiwigoBotSecret
+        input
       );
       if (!effective || !effective.config.enabled) {
         continue;
@@ -175,7 +168,6 @@ export async function listConfiguredPiwigoGalleryEligibleScopes(
         groupId: resolved.groupId,
         groupWid: resolved.groupWid,
         managementMode: resolved.managementMode,
-        linkChoiceKey: group.communityMetadata?.linkedParentChatId || group.chatId,
         scopeLabel,
         label: group.displayName || resolved.groupWid,
         config: effective.config,
@@ -194,8 +186,7 @@ async function resolveEffectivePiwigoGalleryConfig(
   scopeResolver: PluginScopeResolver,
   db: PrismaClient,
   whatsAppAccountId: string,
-  defaultPiwigoBaseUrl?: string | undefined,
-  defaultPiwigoBotSecret?: string | undefined
+  connectionDefaults: GalleryConnectionDefaults
 ): Promise<{ config: PiwigoGalleryConfig; connection: GalleryConnection } | undefined> {
   let scopeIds: string[];
   try {
@@ -231,7 +222,7 @@ async function resolveEffectivePiwigoGalleryConfig(
   }
 
   const config = parsePiwigoGalleryConfig(merged);
-  const connection = configConnection(config, defaultPiwigoBaseUrl, defaultPiwigoBotSecret);
+  const connection = configConnection(config, connectionDefaults);
   return connection ? { config, connection } : undefined;
 }
 

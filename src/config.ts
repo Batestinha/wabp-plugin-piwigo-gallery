@@ -1,8 +1,15 @@
 import { z } from 'zod';
+import type { AppConfig } from '../../../platform/config/runtimeConfig';
+import { parseCanonicalHttpsIssuer } from '../../../platform/identity/clientCredentialsTokenProvider';
 
 export const PIWIGO_GALLERY_DEFAULT_BASE_URL_ENV = 'PIWIGO_GALLERY_DEFAULT_BASE_URL';
-export const PIWIGO_GALLERY_DEFAULT_BOT_SECRET_ENV = 'PIWIGO_GALLERY_DEFAULT_BOT_SECRET';
-export const PIWIGO_GALLERY_ACCOUNT_PROFILE_URL_ENV = 'PIWIGO_GALLERY_ACCOUNT_PROFILE_URL';
+export const TOPOMARE_OIDC_ISSUER_ENV = 'TOPOMARE_OIDC_ISSUER';
+export const TOPOMARE_WABP_GALLERY_SERVICE_OIDC_CLIENT_ID_ENV =
+  'TOPOMARE_WABP_GALLERY_SERVICE_OIDC_CLIENT_ID';
+export const TOPOMARE_WABP_GALLERY_SERVICE_OIDC_CLIENT_SECRET_FILE_ENV =
+  'TOPOMARE_WABP_GALLERY_SERVICE_OIDC_CLIENT_SECRET_FILE';
+export const TOPOMARE_WABP_PROVIDER_NAMESPACE_ENV = 'TOPOMARE_WABP_PROVIDER_NAMESPACE';
+export const TOPOMARE_PIWIGO_PROVIDER_NAMESPACE_ENV = 'TOPOMARE_PIWIGO_PROVIDER_NAMESPACE';
 export const PIWIGO_GALLERY_UNLIMITED_FILE_BYTES = Number.MAX_SAFE_INTEGER;
 export const PIWIGO_ALBUM_ANNOUNCEMENT_TEMPLATE_TOKENS = ['album', 'site', 'user'] as const;
 
@@ -27,8 +34,6 @@ export const piwigoGalleryConfigSchema = z.object({
     allowScopeMemberUploads: z.boolean().default(false)
   }).default({}),
   mediaDumpDocumentsHint: z.string().trim().max(500).default(''),
-  accountCreationLabel: z.string().trim().min(1).max(120).default('Piwigo'),
-  accountProfileUrl: z.string().trim().url().or(z.literal('')).default(''),
   newAlbumAnnouncementsEnabled: z.boolean().default(false),
   announcementGroupWid: z.string().trim().regex(/^[^\s@]+@g\.us$/i).or(z.literal('')).default(''),
   newAlbumAnnouncementTemplate: piwigoAlbumAnnouncementTemplateSchema.default(''),
@@ -39,7 +44,20 @@ export type PiwigoGalleryConfig = z.infer<typeof piwigoGalleryConfigSchema>;
 
 export interface GalleryConnection {
   piwigoBaseUrl: string;
-  botSecret: string;
+  topomareOidcIssuer: string;
+  topomareWabpProviderNamespace: string;
+  topomarePiwigoProviderNamespace: string;
+  serviceOidcClientId: string;
+  serviceOidcClientSecret: string;
+}
+
+export interface GalleryConnectionDefaults {
+  piwigoBaseUrl: string;
+  topomareOidcIssuer: string;
+  topomareWabpProviderNamespace: string;
+  topomarePiwigoProviderNamespace: string;
+  serviceOidcClientId: string;
+  serviceOidcClientSecret: string;
 }
 
 export function parsePiwigoGalleryConfig(input: unknown): PiwigoGalleryConfig {
@@ -69,51 +87,120 @@ export function resolvePiwigoUploadMaxBytes(
 
 export function configConnection(
   _config: PiwigoGalleryConfig,
-  defaultBaseUrl?: string | undefined,
-  defaultBotSecret?: string | undefined
+  defaults: GalleryConnectionDefaults
 ): GalleryConnection | undefined {
-  const piwigoBaseUrl = resolvePiwigoBaseUrl(defaultBaseUrl);
-  const botSecret = resolvePiwigoBotSecret(defaultBotSecret);
-  if (!piwigoBaseUrl || !botSecret) {
+  const configured = {
+    piwigoBaseUrl: defaults.piwigoBaseUrl,
+    topomareOidcIssuer: defaults.topomareOidcIssuer,
+    topomareWabpProviderNamespace: defaults.topomareWabpProviderNamespace,
+    topomarePiwigoProviderNamespace: defaults.topomarePiwigoProviderNamespace,
+    serviceOidcClientId: defaults.serviceOidcClientId,
+    serviceOidcClientSecret: defaults.serviceOidcClientSecret
+  };
+  const values = Object.values(configured);
+  if (values.every((value) => value === '')) {
     return undefined;
   }
+  if (values.some((value) => value === '')) {
+    throw new Error('Topomare Gallery service integration configuration is incomplete.');
+  }
   return {
-    piwigoBaseUrl,
-    botSecret
+    piwigoBaseUrl: requiredPiwigoBaseUrl(configured.piwigoBaseUrl),
+    topomareOidcIssuer: requiredTopomareOidcIssuer(configured.topomareOidcIssuer),
+    topomareWabpProviderNamespace: stableDeploymentIdentifier(
+      configured.topomareWabpProviderNamespace,
+      TOPOMARE_WABP_PROVIDER_NAMESPACE_ENV
+    ),
+    topomarePiwigoProviderNamespace: stableDeploymentIdentifier(
+      configured.topomarePiwigoProviderNamespace,
+      TOPOMARE_PIWIGO_PROVIDER_NAMESPACE_ENV
+    ),
+    serviceOidcClientId: stableDeploymentIdentifier(
+      configured.serviceOidcClientId,
+      TOPOMARE_WABP_GALLERY_SERVICE_OIDC_CLIENT_ID_ENV
+    ),
+    serviceOidcClientSecret: requiredServiceOidcClientSecret(configured.serviceOidcClientSecret)
+  };
+}
+
+export function galleryConnectionDefaultsFromAppConfig(
+  config: Pick<
+    AppConfig,
+    | 'PIWIGO_GALLERY_DEFAULT_BASE_URL'
+    | 'TOPOMARE_OIDC_ISSUER'
+    | 'TOPOMARE_WABP_GALLERY_SERVICE_OIDC_CLIENT_ID'
+    | 'TOPOMARE_WABP_PROVIDER_NAMESPACE'
+    | 'TOPOMARE_PIWIGO_PROVIDER_NAMESPACE'
+    | 'topomareWabpGalleryServiceOidcClientSecret'
+  >
+): GalleryConnectionDefaults {
+  return {
+    piwigoBaseUrl: config.PIWIGO_GALLERY_DEFAULT_BASE_URL,
+    topomareOidcIssuer: config.TOPOMARE_OIDC_ISSUER,
+    topomareWabpProviderNamespace: config.TOPOMARE_WABP_PROVIDER_NAMESPACE,
+    topomarePiwigoProviderNamespace: config.TOPOMARE_PIWIGO_PROVIDER_NAMESPACE,
+    serviceOidcClientId: config.TOPOMARE_WABP_GALLERY_SERVICE_OIDC_CLIENT_ID,
+    serviceOidcClientSecret: config.topomareWabpGalleryServiceOidcClientSecret
   };
 }
 
 export function resolvePiwigoBaseUrl(defaultBaseUrl?: string | undefined): string {
-  return normalizeOptionalUrl(defaultBaseUrl?.trim() ? defaultBaseUrl : defaultPiwigoBaseUrl());
-}
-
-export function defaultPiwigoBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
-  return normalizeOptionalUrl(env[PIWIGO_GALLERY_DEFAULT_BASE_URL_ENV]?.trim() ?? '');
-}
-
-export function resolvePiwigoBotSecret(defaultBotSecret?: string | undefined): string {
-  return defaultBotSecret?.trim() || defaultPiwigoBotSecret();
-}
-
-export function defaultPiwigoBotSecret(env: NodeJS.ProcessEnv = process.env): string {
-  return env[PIWIGO_GALLERY_DEFAULT_BOT_SECRET_ENV]?.trim() ?? '';
-}
-
-export function resolvePiwigoAccountProfileUrl(
-  config: PiwigoGalleryConfig,
-  defaultAccountProfileUrl?: string | undefined
-): string {
-  return normalizeOptionalUrl(defaultAccountProfileUrl?.trim() || config.accountProfileUrl);
-}
-
-function normalizeOptionalUrl(input: string): string {
-  const value = input.trim();
-  if (!value || !z.string().url().safeParse(value).success) {
+  const value = defaultBaseUrl?.trim() ?? '';
+  if (!value) {
     return '';
   }
-  return normalizePiwigoBaseUrl(value);
+  return requiredPiwigoBaseUrl(value);
 }
 
 export function normalizePiwigoBaseUrl(input: string): string {
   return input.trim().replace(/\/+$/, '');
+}
+
+function requiredPiwigoBaseUrl(input: string): string {
+  if (input.trim() !== input) {
+    throw new Error(`${PIWIGO_GALLERY_DEFAULT_BASE_URL_ENV} must be an exact HTTPS URL.`);
+  }
+  const value = normalizePiwigoBaseUrl(input);
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${PIWIGO_GALLERY_DEFAULT_BASE_URL_ENV} must be an HTTPS URL.`);
+  }
+  if (
+    url.protocol !== 'https:'
+    || url.username !== ''
+    || url.password !== ''
+    || url.search !== ''
+    || url.hash !== ''
+  ) {
+    throw new Error(`${PIWIGO_GALLERY_DEFAULT_BASE_URL_ENV} must be an HTTPS URL without credentials, query, or fragment.`);
+  }
+  return value;
+}
+
+function requiredTopomareOidcIssuer(input: string): string {
+  if (input.trim() !== input) {
+    throw new Error(`${TOPOMARE_OIDC_ISSUER_ENV} must be an exact canonical HTTPS realm URL.`);
+  }
+  return parseCanonicalHttpsIssuer(input);
+}
+
+function stableDeploymentIdentifier(input: string, name: string): string {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$/u.test(input)) {
+    throw new Error(`${name} is invalid.`);
+  }
+  return input;
+}
+
+function requiredServiceOidcClientSecret(input: string): string {
+  if (
+    input.trim() !== input
+    || input.length < 16
+    || input.length > 8_192
+    || /[\r\n\0]/u.test(input)
+  ) {
+    throw new Error('Topomare WABP Gallery OIDC client secret is invalid.');
+  }
+  return input;
 }

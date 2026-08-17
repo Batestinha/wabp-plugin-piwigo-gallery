@@ -23,7 +23,7 @@ export const piwigoGalleryMessages: MessageCatalog = {
   'official.piwigo-gallery.disabled': 'Gallery uploads are disabled for this group.',
   'official.piwigo-gallery.observeOnly': 'This group is in observe-only mode, so gallery uploads cannot start here.',
   'official.piwigo-gallery.status': 'enabled={enabled}\nurl={url}\nautoFinalizeMinutes={auto}\nmaxFileBytes={max}\nnewAlbumAnnouncementsEnabled={announceEnabled}\nannouncementGroupWid={announcementGroup}\nnewAlbumAnnouncementDelayMinutes={announcementDelay}',
-  'official.piwigo-gallery.multipleLinkedGalleries': 'This WhatsApp identity is linked to more than one gallery. Choose one with /gallery upload --scope NAME_OR_ID:\n\n{choices}',
+  'official.piwigo-gallery.multipleAuthorizedGalleries': 'Your Topomare account is authorized for more than one gallery. Choose one with /gallery upload --scope NAME_OR_ID:\n\n{choices}',
   'official.piwigo-gallery.accountRequired': 'Your Topomare account is not authorized for this gallery. Sign in at https://topomare.de to review your access.',
   'official.piwigo-gallery.noPeople': 'No selectable people were returned by Piwigo.',
   'official.piwigo-gallery.uploadStartedGroup': 'I sent the setup questions here. Answer them to start collecting documents.',

@@ -88,14 +88,6 @@ export const piwigoGalleryControls: ControlDescriptor[] = [
     }
   }),
   control({
-    path: 'accountCreationLabel',
-    label: 'Account creation label',
-    description: 'Name shown in WhatsApp when an upload user needs to create a Piwigo account.',
-    order: 62,
-    schema: { type: 'string', max: 120 },
-    ui: { widget: 'text' }
-  }),
-  control({
     path: 'newAlbumAnnouncementsEnabled',
     label: 'New album announcements',
     description: 'Announce newly populated Piwigo albums to a WhatsApp group.',

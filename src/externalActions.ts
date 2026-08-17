@@ -336,7 +336,7 @@ class PiwigoGalleryExternalActionRuntime {
   }
 
   private database() {
-    return preparedGalleryDatabase(this.context.dataStore, this.context.databases);
+    return preparedGalleryDatabase(this.context.databases);
   }
 
   private async groupBelongsToScope(scopeId: string, groupWid: string): Promise<boolean> {

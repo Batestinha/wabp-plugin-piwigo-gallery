@@ -20,10 +20,12 @@ import {
   requireScopeId
 } from '../shared';
 import {
+  galleryConnectionDefaultsFromAppConfig,
   parsePiwigoGalleryConfig,
   resolvePiwigoUploadMaxBytes,
   resolvePiwigoBaseUrl,
   type GalleryConnection,
+  type GalleryConnectionDefaults,
   type PiwigoGalleryConfig
 } from './config';
 import {
@@ -45,7 +47,8 @@ import {
   PiwigoApiError,
   PiwigoGalleryClient,
   supportsPiwigoEventAlbumSource,
-  type PiwigoPeopleResult
+  type PiwigoPeopleResult,
+  type PiwigoStatusResult
 } from './piwigoClient';
 import {
   cancelBatch,
@@ -58,13 +61,18 @@ import {
   requestBatchFinalization,
   resolveGalleryConnection,
   saveDraft,
-  type GalleryUploadBatch
+  type GalleryUploadBatch,
+  type NewGalleryUploadBatch
 } from './store';
 import { preparedGalleryDatabase } from './storageRuntime';
 import {
   listConfiguredPiwigoGalleryEligibleScopes,
   type ConfiguredPiwigoGalleryScope
 } from './eligibility';
+import {
+  FederatedTopomareGalleryPrincipalResolver,
+  type TopomareGalleryPrincipal
+} from './topomarePrincipal';
 
 const SCOPE_TARGET: CommandTargetSpec = {
   kind: 'scope',
@@ -84,7 +92,8 @@ export interface GalleryUploadTarget {
   config: PiwigoGalleryConfig;
   connection: GalleryConnection;
   actor: {
-    whatsappJid: string;
+    principal: TopomareGalleryPrincipal;
+    piwigoUserId: number;
     peopleResult: PiwigoPeopleResult;
   };
 }
@@ -95,7 +104,7 @@ type GalleryUploadTargetResolution =
 
 export type PrivateGalleryScopeSelection =
   | { kind: 'unauthorized' }
-  | { kind: 'unlinked'; candidate: ConfiguredPiwigoGalleryScope }
+  | { kind: 'subject-unavailable'; candidate: ConfiguredPiwigoGalleryScope }
   | { kind: 'multiple'; candidates: ConfiguredPiwigoGalleryScope[] }
   | {
       kind: 'resolved';
@@ -128,10 +137,8 @@ export function registerPiwigoGalleryCommands(context: PluginCommandContext): vo
     }
     const config = parsePiwigoGalleryConfig(await runtime.configFor(scopeId, actor.identityId));
     const connection = await resolveGalleryConnection(
-      runtime.dataStore,
       config,
-      context.config.PIWIGO_GALLERY_DEFAULT_BASE_URL,
-      context.config.PIWIGO_GALLERY_DEFAULT_BOT_SECRET
+      galleryConnectionDefaultsFromAppConfig(context.config)
     );
     return {
       handled: true,
@@ -189,7 +196,7 @@ export function registerPiwigoGalleryCancellations(context: PluginCommandContext
     {
       workflowId: 'gallery-upload-setup',
       cancel: async (input) => {
-        const db = await preparedGalleryDatabase(runtime.dataStore, runtime.databases);
+        const db = await preparedGalleryDatabase(runtime.databases);
         let cancelled = false;
         for (const flow of input.cancelledFlows) {
           if (!flow.scopeId || !flow.flowType.startsWith('official.piwigo-gallery.upload.')) {
@@ -212,7 +219,7 @@ export function registerPiwigoGalleryCancellations(context: PluginCommandContext
         if (!actor) {
           return undefined;
         }
-        const db = await preparedGalleryDatabase(runtime.dataStore, runtime.databases);
+        const db = await preparedGalleryDatabase(runtime.databases);
         const privateBatch = input.message.context === 'private'
           ? getActiveBatchAcrossScopes(db, input.message.chatId, actor.identityId)
           : undefined;
@@ -302,7 +309,6 @@ interface PiwigoCommandActor {
   canonicalWid: string;
   deliveryChatId: string;
   mentionWid: string;
-  piwigoAccountWid: string;
 }
 
 function piwigoCommandActor(actor: MessageActor): PiwigoCommandActor | undefined;
@@ -317,16 +323,14 @@ function piwigoCommandActor(
   const identityId = actor.identityAddress.identityId?.trim() ?? '';
   const canonicalWid = actor.identityAddress.canonicalWid.trim();
   const deliveryChatId = actor.identityAddress.deliveryChatId.trim();
-  const piwigoAccountWid = actor.identityAddress.addressBookWid.trim();
-  if (!identityId || !canonicalWid || !deliveryChatId || !piwigoAccountWid) {
+  if (!identityId || !canonicalWid || !deliveryChatId) {
     return undefined;
   }
   return {
     identityId,
     canonicalWid,
     deliveryChatId,
-    mentionWid: actor.identityAddress.mentionWid.trim(),
-    piwigoAccountWid
+    mentionWid: actor.identityAddress.mentionWid.trim()
   };
 }
 
@@ -337,28 +341,39 @@ async function galleryTargetLabel(context: PluginCommandContext, groupWid: strin
 
 async function peopleForPiwigoActor(
   client: PiwigoGalleryClient,
-  piwigoAccountWid: string,
+  principalResolver: FederatedTopomareGalleryPrincipalResolver,
+  actorIdentityId: string,
   scopeId: string
-): Promise<{ whatsappJid: string; peopleResult: PiwigoPeopleResult } | undefined> {
+): Promise<GalleryUploadTarget['actor'] | undefined> {
   try {
+    const principal = await principalResolver.resolveForIdentity(actorIdentityId);
+    await client.preflight();
+    const peopleResult = await client.people(principal, scopeId);
     return {
-      whatsappJid: piwigoAccountWid,
-      peopleResult: await client.people(piwigoAccountWid, scopeId)
+      principal,
+      piwigoUserId: peopleResult.piwigoUserId,
+      peopleResult
     };
   } catch (error) {
-    if (!isMissingPiwigoLink(error)) {
+    if (!isUnavailableGallerySubject(error)) {
       throw error;
     }
     return undefined;
   }
 }
 
+function topomareGalleryPrincipalResolver(
+  context: Pick<PluginCommandContext, 'config'>
+): FederatedTopomareGalleryPrincipalResolver {
+  return new FederatedTopomareGalleryPrincipalResolver(
+    context.config.TOPOMARE_OIDC_ISSUER,
+    context.config.TOPOMARE_WABP_PROVIDER_NAMESPACE
+  );
+}
+
 async function configuredPiwigoScopesForCommand(
   actor: PiwigoCommandActor,
-  input: {
-    defaultPiwigoBaseUrl?: string | undefined;
-    defaultPiwigoBotSecret?: string | undefined;
-  }
+  input: GalleryConnectionDefaults
 ): Promise<ConfiguredPiwigoGalleryScope[]> {
   return listConfiguredPiwigoGalleryEligibleScopes(actor.identityId, input);
 }
@@ -380,7 +395,7 @@ async function routeGalleryUpload(
   }
   let batch: GalleryUploadBatch | undefined;
   try {
-    const db = await preparedGalleryDatabase(runtime.dataStore, runtime.databases);
+    const db = await preparedGalleryDatabase(runtime.databases);
     batch = getActiveBatchAcrossScopes(db, ctx.message.chatId, actor.identityId);
   } catch (error) {
     return galleryUploadStateFailure(context, ctx, error, 'active-batch-lookup');
@@ -419,10 +434,10 @@ async function galleryUploadCommandMatchesBatch(
   if (!explicitScope || normalizeGalleryTarget(explicitScope) === normalizeGalleryTarget(batch.scopeId)) {
     return true;
   }
-  const configured = await configuredPiwigoScopesForCommand(actor, {
-    defaultPiwigoBaseUrl: context.config.PIWIGO_GALLERY_DEFAULT_BASE_URL,
-    defaultPiwigoBotSecret: context.config.PIWIGO_GALLERY_DEFAULT_BOT_SECRET
-  });
+  const configured = await configuredPiwigoScopesForCommand(
+    actor,
+    galleryConnectionDefaultsFromAppConfig(context.config)
+  );
   return configured.some((candidate) =>
     candidate.scopeId === batch.scopeId && galleryScopeMatches(candidate, explicitScope)
   );
@@ -509,7 +524,7 @@ async function startUploadFlow(
     return { handled: true, text: resolution.text };
   }
   const { target, t } = resolution;
-  const db = await preparedGalleryDatabase(runtime.dataStore, runtime.databases);
+  const db = await preparedGalleryDatabase(runtime.databases);
   const collectionChatId = ctx.message.context === 'private' ? ctx.message.chatId : target.groupWid;
   let active: GalleryUploadBatch | undefined;
   try {
@@ -524,14 +539,15 @@ async function startUploadFlow(
     return handleActiveGalleryUpload(context, ctx, active, actor.identityId);
   }
 
-  let stage = 'people';
+  let stage = 'preflight';
   let createdFlowSessionId: string | undefined;
   try {
     const client = new PiwigoGalleryClient(target.connection);
+    const status = await client.preflight();
     stage = 'accepted-types';
     const [acceptedTypes, eventCandidates] = await Promise.all([
       client.acceptedTypes(),
-      galleryEventCandidates(context, client, target, ctx)
+      galleryEventCandidates(context, status, target, ctx)
     ]);
     const privateActorWid = actor.deliveryChatId;
     const privateDeliveryFallback = piwigoPrivateFlowDeliveryFallback(ctx, actor);
@@ -562,12 +578,13 @@ async function startUploadFlow(
           collectionChatId,
           actorWid: actor.canonicalWid,
           actorIdentityId: actor.identityId,
-          piwigoLinkedWid: target.actor.whatsappJid,
+          topomareUserId: target.actor.principal.topomareUserId,
+          piwigoUserId: target.actor.piwigoUserId,
           actorLabel: ctx.message.senderDisplayName ?? ctx.message.senderWid,
           acceptedExtensions: acceptedTypes.extensions,
           maxFileBytes: resolvePiwigoUploadMaxBytes(
             target.config.maxFileBytes,
-            acceptedTypes.max_file_size
+            acceptedTypes.maxFileSize
           ),
           autoFinalizeMinutes: target.config.autoFinalizeMinutes,
           createdAt: new Date().toISOString()
@@ -628,23 +645,22 @@ async function resolveGroupGalleryUploadTarget(
     return { kind: 'reply', text: t('official.piwigo-gallery.observeOnly') };
   }
   const connection = await resolveGalleryConnection(
-    runtime.dataStore,
     config,
-    context.config.PIWIGO_GALLERY_DEFAULT_BASE_URL,
-    context.config.PIWIGO_GALLERY_DEFAULT_BOT_SECRET
+    galleryConnectionDefaultsFromAppConfig(context.config)
   );
   if (!connection) {
     return { kind: 'reply', text: t('official.piwigo-gallery.notConfigured') };
   }
   const actor = await peopleForPiwigoActor(
     new PiwigoGalleryClient(connection),
-    commandActor.piwigoAccountWid,
+    topomareGalleryPrincipalResolver(context),
+    commandActor.identityId,
     scopeId
   );
   if (!actor || actor.peopleResult.people.length === 0) {
     return {
       kind: 'reply',
-      text: uploadAccountRequiredMessage(t)
+      text: uploadAccessUnavailableMessage(t)
     };
   }
   return {
@@ -669,10 +685,10 @@ async function resolvePrivateGalleryUploadTarget(
   actor: PiwigoCommandActor
 ): Promise<GalleryUploadTargetResolution> {
   const fallbackT = await piwigoCommandTranslator(context, ctx);
-  const configured = await configuredPiwigoScopesForCommand(actor, {
-    defaultPiwigoBaseUrl: context.config.PIWIGO_GALLERY_DEFAULT_BASE_URL,
-    defaultPiwigoBotSecret: context.config.PIWIGO_GALLERY_DEFAULT_BOT_SECRET
-  });
+  const configured = await configuredPiwigoScopesForCommand(
+    actor,
+    galleryConnectionDefaultsFromAppConfig(context.config)
+  );
   if (configured.length === 0) {
     return { kind: 'reply', text: fallbackT('official.piwigo-gallery.notConfigured') };
   }
@@ -687,29 +703,30 @@ async function resolvePrivateGalleryUploadTarget(
     return { kind: 'reply', text: fallbackT('official.piwigo-gallery.notConfigured') };
   }
 
-  const selection = await selectLinkedPrivateGalleryScope(eligible, {
+  const selection = await selectAuthorizedPrivateGalleryScope(eligible, {
     authorize: (candidate) => galleryUploadScopeAuthorized(context, actor, candidate),
     people: (candidate) => peopleForPiwigoActor(
       new PiwigoGalleryClient(candidate.connection),
-      actor.piwigoAccountWid,
+      topomareGalleryPrincipalResolver(context),
+      actor.identityId,
       candidate.scopeId
     )
   });
   if (selection.kind === 'unauthorized') {
     return { kind: 'reply', text: ctx.t('core.router.notAuthorized') };
   }
-  if (selection.kind === 'unlinked') {
+  if (selection.kind === 'subject-unavailable') {
     const t = await piwigoCommandTranslator(context, ctx, selection.candidate.scopeId);
     return {
       kind: 'reply',
-      text: uploadAccountRequiredMessage(t)
+      text: uploadAccessUnavailableMessage(t)
     };
   }
   if (selection.kind === 'multiple') {
     const t = await piwigoCommandTranslator(context, ctx, selection.candidates[0]?.scopeId);
     return {
       kind: 'reply',
-      text: t('official.piwigo-gallery.multipleLinkedGalleries', {
+      text: t('official.piwigo-gallery.multipleAuthorizedGalleries', {
         choices: formatGalleryScopeChoices(selection.candidates)
       })
     };
@@ -732,14 +749,14 @@ async function resolvePrivateGalleryUploadTarget(
   };
 }
 
-export async function selectLinkedPrivateGalleryScope(
+export async function selectAuthorizedPrivateGalleryScope(
   candidates: ConfiguredPiwigoGalleryScope[],
   input: {
     authorize(candidate: ConfiguredPiwigoGalleryScope): Promise<boolean>;
     people(candidate: ConfiguredPiwigoGalleryScope): Promise<GalleryUploadTarget['actor'] | undefined>;
   }
 ): Promise<PrivateGalleryScopeSelection> {
-  const linked: Array<{
+  const available: Array<{
     candidate: ConfiguredPiwigoGalleryScope;
     actor: GalleryUploadTarget['actor'];
   }> = [];
@@ -761,16 +778,16 @@ export async function selectLinkedPrivateGalleryScope(
     if (!actor || actor.peopleResult.people.length === 0) {
       continue;
     }
-    linked.push({ candidate, actor });
+    available.push({ candidate, actor });
   }
-  if (linked.length === 1) {
-    return { kind: 'resolved', ...linked[0]! };
+  if (available.length === 1) {
+    return { kind: 'resolved', ...available[0]! };
   }
-  if (linked.length > 1) {
-    return { kind: 'multiple', candidates: linked.map((value) => value.candidate) };
+  if (available.length > 1) {
+    return { kind: 'multiple', candidates: available.map((value) => value.candidate) };
   }
   return firstAuthorized
-    ? { kind: 'unlinked', candidate: firstAuthorized }
+    ? { kind: 'subject-unavailable', candidate: firstAuthorized }
     : { kind: 'unauthorized' };
 }
 
@@ -836,7 +853,7 @@ function managementModeRank(mode: ConfiguredPiwigoGalleryScope['managementMode']
   return mode === 'MANAGE' ? 3 : mode === 'ASSIST' ? 2 : 1;
 }
 
-function uploadAccountRequiredMessage(
+function uploadAccessUnavailableMessage(
   t: TranslateFn
 ): string {
   return t('official.piwigo-gallery.accountRequired');
@@ -849,7 +866,7 @@ function registerUploadFlowCompletionHandler(context: PluginCommandContext): voi
     if (!await context.flowEngine.getLockedPromptLock(lock.flowPromptId)) {
       return false;
     }
-    const db = await preparedGalleryDatabase(runtime.dataStore, runtime.databases);
+    const db = await preparedGalleryDatabase(runtime.databases);
     if (!lock.flowSessionId) {
       return false;
     }
@@ -900,6 +917,44 @@ function registerUploadFlowCompletionHandler(context: PluginCommandContext): voi
       await context.flowEngine.acknowledgePromptLock(lock.flowPromptId);
       return true;
     }
+    if (!existingBatch && draft) {
+      let subjectStillAuthorized = false;
+      try {
+        const config = parsePiwigoGalleryConfig(
+          await runtime.configFor(snapshot.scopeId, draft.actorIdentityId)
+        );
+        const connection = await resolveGalleryConnection(
+          config,
+          galleryConnectionDefaultsFromAppConfig(context.config)
+        );
+        if (connection && snapshot.identityId === draft.actorIdentityId) {
+          const subject = await peopleForPiwigoActor(
+            new PiwigoGalleryClient(connection),
+            topomareGalleryPrincipalResolver(context),
+            draft.actorIdentityId,
+            draft.scopeId
+          );
+          subjectStillAuthorized = Boolean(
+            subject
+            && subject.principal.topomareUserId === draft.topomareUserId
+            && subject.principal.wabpIdentityId === draft.actorIdentityId
+            && subject.piwigoUserId === draft.piwigoUserId
+          );
+        }
+      } catch (error) {
+        logger.warn({ error, scopeId: draft.scopeId }, 'Gallery draft subject revalidation failed');
+      }
+      if (!subjectStillAuthorized) {
+        await activeTransport.sendText(
+          draft.collectionChatId,
+          t('official.piwigo-gallery.accountRequired'),
+          { idempotencyKey: `piwigo-gallery:flow:${lock.flowSessionId}:subject-revoked` }
+        );
+        deleteDraft(db, draft.scopeId, draft.flowSessionId);
+        await context.flowEngine.acknowledgePromptLock(lock.flowPromptId);
+        return true;
+      }
+    }
     if (!existingBatch && answers.albumSource.kind === 'community-event') {
       if (!draft) {
         return false;
@@ -934,7 +989,7 @@ function registerUploadFlowCompletionHandler(context: PluginCommandContext): voi
       }
       const now = new Date();
       const autoFinalizeAt = new Date(now.getTime() + draft.autoFinalizeMinutes * 60_000);
-      const batch: GalleryUploadBatch = {
+      const batch: NewGalleryUploadBatch = {
         id: batchId,
         status: 'collecting',
         scopeId: draft.scopeId,
@@ -944,7 +999,8 @@ function registerUploadFlowCompletionHandler(context: PluginCommandContext): voi
         collectionChatId: draft.collectionChatId,
         actorWid: draft.actorWid,
         actorIdentityId: draft.actorIdentityId,
-        ...(draft.piwigoLinkedWid ? { piwigoLinkedWid: draft.piwigoLinkedWid } : {}),
+        topomareUserId: draft.topomareUserId,
+        piwigoUserId: draft.piwigoUserId,
         actorLabel: draft.actorLabel,
         onde: answers.onde,
         quando: answers.quando,
@@ -990,7 +1046,7 @@ function registerUploadFlowCompletionHandler(context: PluginCommandContext): voi
 
 async function galleryEventCandidates(
   context: PluginCommandContext,
-  client: PiwigoGalleryClient,
+  status: PiwigoStatusResult,
   target: GalleryUploadTarget,
   ctx: CommandContext
 ): Promise<EventAlbumSource[]> {
@@ -1005,7 +1061,6 @@ async function galleryEventCandidates(
     if (!await context.catalog.enabledFor(EVENTS_PLUGIN_ID, target.scopeId)) {
       return [];
     }
-    const status = await client.status();
     if (!supportsPiwigoEventAlbumSource(status)) {
       return [];
     }
@@ -1129,7 +1184,20 @@ async function finalizeActiveGalleryUpload(
   t: TranslateFn
 ) {
   const runtime = requireOfficialCommandRuntime(context);
-  const db = await preparedGalleryDatabase(runtime.dataStore, runtime.databases);
+  const db = await preparedGalleryDatabase(runtime.databases);
+  if (batch.files.length > 0) {
+    try {
+      await assertReleaseReadyActiveBatchSubject(context, batch);
+    } catch (error) {
+      return galleryUploadStateFailure(
+        context,
+        ctx,
+        error,
+        'finalization-subject-preflight',
+        batch.scopeId
+      );
+    }
+  }
   const requestedAt = new Date().toISOString();
   const requested = requestBatchFinalization(db, {
     scopeId: batch.scopeId,
@@ -1186,6 +1254,40 @@ async function finalizeActiveGalleryUpload(
   };
 }
 
+async function assertReleaseReadyActiveBatchSubject(
+  context: PluginCommandContext,
+  batch: GalleryUploadBatch
+): Promise<void> {
+  if (batch.topomareUserId === null || batch.piwigoUserId === null) {
+    throw new Error('Gallery upload has no immutable Topomare/Piwigo subject binding.');
+  }
+  const runtime = requireOfficialCommandRuntime(context);
+  const config = parsePiwigoGalleryConfig(
+    await runtime.configFor(batch.scopeId, batch.actorIdentityId)
+  );
+  const connection = await resolveGalleryConnection(
+    config,
+    galleryConnectionDefaultsFromAppConfig(context.config)
+  );
+  if (!connection) {
+    throw new Error('Gallery connection is not configured.');
+  }
+  const client = new PiwigoGalleryClient(connection);
+  await client.preflight();
+  const principal = await topomareGalleryPrincipalResolver(context)
+    .resolveForIdentity(batch.actorIdentityId);
+  if (
+    principal.topomareUserId !== batch.topomareUserId
+    || principal.wabpIdentityId !== batch.actorIdentityId
+  ) {
+    throw new Error('Gallery upload subject no longer matches the captured Topomare principal.');
+  }
+  const people = await client.people(principal, batch.scopeId);
+  if (people.piwigoUserId !== batch.piwigoUserId) {
+    throw new Error('Gallery upload Piwigo shadow-user binding changed after capture.');
+  }
+}
+
 async function galleryBatchPermissionAllowed(
   context: PluginCommandContext,
   batch: Pick<GalleryUploadBatch, 'scopeId' | 'groupId' | 'groupWid'>,
@@ -1223,7 +1325,7 @@ async function cancelGalleryBatch(
   if (batch.status !== 'collecting') {
     return false;
   }
-  const db = await preparedGalleryDatabase(runtime.dataStore, runtime.databases);
+  const db = await preparedGalleryDatabase(runtime.databases);
   const result = cancelBatch(db, {
     scopeId: batch.scopeId,
     batchId: batch.id,
@@ -1356,10 +1458,10 @@ function parseConfigPatch(args: string[]): Record<string, unknown> | undefined {
   return patch;
 }
 
-function isMissingPiwigoLink(error: unknown): boolean {
+function isUnavailableGallerySubject(error: unknown): boolean {
   return error instanceof PiwigoApiError &&
-    error.method === 'wabp.piwigo.media.people' &&
-    error.piwigoCode === 404;
+    error.method === 'topomare.gallery.peopleForSubject' &&
+    [403, 404].includes(error.piwigoCode ?? error.httpStatus ?? 0);
 }
 
 function localizedPiwigoFailure(t: TranslateFn, error: unknown): string {

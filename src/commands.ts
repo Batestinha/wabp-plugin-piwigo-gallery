@@ -15,7 +15,6 @@ import {
 } from '../community-events/serviceApi';
 import { EVENTS_PLUGIN_ID } from '../community-events/manifest';
 import {
-  commandText,
   parseBoolean,
   requireOfficialCommandRuntime,
   requireScopeId
@@ -23,7 +22,6 @@ import {
 import {
   parsePiwigoGalleryConfig,
   resolvePiwigoUploadMaxBytes,
-  resolvePiwigoAccountProfileUrl,
   resolvePiwigoBaseUrl,
   type GalleryConnection,
   type PiwigoGalleryConfig
@@ -183,64 +181,6 @@ export function registerPiwigoGalleryCommands(context: PluginCommandContext): vo
     topicId: 'upload-gallery',
     exampleKey: 'official.piwigo-gallery.help.upload.example'
   }), async (ctx) => routeGalleryUpload(context, ctx, uploadFlowDefinition));
-
-  router.register('gallery', 'signup', galleryAuthCommand({
-    auditAction: 'piwigo-gallery.account.register',
-    usage: '/gallery signup Your Name',
-    descriptionKey: 'official.piwigo-gallery.help.register',
-    topicId: 'link-gallery-account',
-    exampleKey: 'official.piwigo-gallery.help.register.example'
-  }), async (ctx) => {
-    const fallbackT = await piwigoCommandTranslator(context, ctx);
-    const actor = piwigoCommandActor(ctx);
-    if (!actor) {
-      const error = new Error('Authoritative actor identity is unavailable.');
-      return {
-        handled: true,
-        text: localizedPiwigoFailure(fallbackT, error),
-        pluginActions: [piwigoFailureAuditAction('piwigo-gallery.account.register.failed', error, {
-          stage: 'actor-identity'
-        })]
-      };
-    }
-    const username = commandText(ctx) || ctx.message.senderDisplayName || '';
-    if (!username.trim()) {
-      return { handled: true, text: fallbackT('official.piwigo-gallery.registerUsage') };
-    }
-    const scopes = await configuredPiwigoScopesForCommand(actor, {
-      defaultPiwigoBaseUrl: context.config.PIWIGO_GALLERY_DEFAULT_BASE_URL,
-      defaultPiwigoBotSecret: context.config.PIWIGO_GALLERY_DEFAULT_BOT_SECRET
-    });
-    if (scopes.length === 0) {
-      return { handled: true, text: fallbackT('official.piwigo-gallery.notConfigured') };
-    }
-    const t = await piwigoCommandTranslator(context, ctx, scopes[0]?.scopeId);
-    if (scopes.length > 1) {
-      return { handled: true, text: t('official.piwigo-gallery.multipleEligibleScopes') };
-    }
-    const scope = scopes[0]!;
-    try {
-      const result = await new PiwigoGalleryClient(scope.connection).registerAccount(
-        username,
-        actor.piwigoAccountWid,
-        scope.scopeId
-      );
-      return {
-        handled: true,
-        text: t(result.pending ? 'official.piwigo-gallery.registeredPending' : 'official.piwigo-gallery.registered', {
-          username: result.username
-        })
-      };
-    } catch (error) {
-      return {
-        handled: true,
-        text: localizedPiwigoFailure(t, error),
-        pluginActions: [piwigoFailureAuditAction('piwigo-gallery.account.register.failed', error, {
-          scopeId: scope.scopeId
-        })]
-      };
-    }
-  });
 }
 
 export function registerPiwigoGalleryCancellations(context: PluginCommandContext): PluginCancellationRegistration[] {
@@ -704,7 +644,7 @@ async function resolveGroupGalleryUploadTarget(
   if (!actor || actor.peopleResult.people.length === 0) {
     return {
       kind: 'reply',
-      text: uploadAccountRequiredMessage(t, config, context.config.PIWIGO_GALLERY_ACCOUNT_PROFILE_URL)
+      text: uploadAccountRequiredMessage(t)
     };
   }
   return {
@@ -762,11 +702,7 @@ async function resolvePrivateGalleryUploadTarget(
     const t = await piwigoCommandTranslator(context, ctx, selection.candidate.scopeId);
     return {
       kind: 'reply',
-      text: uploadAccountRequiredMessage(
-        t,
-        selection.candidate.config,
-        context.config.PIWIGO_GALLERY_ACCOUNT_PROFILE_URL
-      )
+      text: uploadAccountRequiredMessage(t)
     };
   }
   if (selection.kind === 'multiple') {
@@ -901,18 +837,9 @@ function managementModeRank(mode: ConfiguredPiwigoGalleryScope['managementMode']
 }
 
 function uploadAccountRequiredMessage(
-  t: TranslateFn,
-  config: ReturnType<typeof parsePiwigoGalleryConfig>,
-  defaultAccountProfileUrl?: string | undefined
+  t: TranslateFn
 ): string {
-  const profileUrl = resolvePiwigoAccountProfileUrl(config, defaultAccountProfileUrl);
-  const key = profileUrl
-    ? 'official.piwigo-gallery.accountRequiredWithProfileUrl'
-    : 'official.piwigo-gallery.accountRequired';
-  return t(key, {
-    accountLabel: config.accountCreationLabel,
-    profileUrl
-  });
+  return t('official.piwigo-gallery.accountRequired');
 }
 
 function registerUploadFlowCompletionHandler(context: PluginCommandContext): void {
@@ -1378,33 +1305,7 @@ function galleryUploadCommand(input: {
   };
 }
 
-function galleryAuthCommand(input: {
-  auditAction: string;
-  usage: string;
-  descriptionKey: string;
-  topicId: GalleryHelpTopic;
-  exampleKey: string;
-}): CommandMetadata {
-  return {
-    plane: 'system',
-    interaction: 'either_same_chat',
-    pluginId: PIWIGO_GALLERY_PLUGIN_ID,
-    mutation: 'durable',
-    auditAction: input.auditAction,
-    assistant: galleryAssistantMetadata(input.usage, 'durable'),
-    help: {
-      familyKey: 'official.piwigo-gallery.help.family',
-      featureId: 'gallery',
-      topicId: input.topicId,
-      descriptionKey: input.descriptionKey,
-      usage: input.usage,
-      exampleKeys: [input.exampleKey],
-      keywords: ['gallery', 'piwigo', input.topicId]
-    }
-  };
-}
-
-type GalleryHelpTopic = 'manage-gallery' | 'upload-gallery' | 'link-gallery-account';
+type GalleryHelpTopic = 'manage-gallery' | 'upload-gallery';
 
 function galleryAssistantMetadata(
   usage: string,

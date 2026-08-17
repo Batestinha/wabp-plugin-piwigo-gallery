@@ -9,11 +9,6 @@ export const PIWIGO_GALLERY_ANNOUNCE_NEW_ALBUM_JOB = 'piwigo-gallery.announce-ne
 export const PIWIGO_GALLERY_MEDIA_DUMP_HINT_JOB = 'piwigo-gallery.media-dump-hint';
 
 export const PIWIGO_GALLERY_EXTERNAL_ACTIONS = {
-  whatsappLinkRequestStart: 'piwigo.whatsappLinkRequest.start',
-  whatsappRegistrationOtpStart: 'piwigo.whatsappRegistrationOtp.start',
-  whatsappRegistrationOtpVerify: 'piwigo.whatsappRegistrationOtp.verify',
-  authCodeSend: 'piwigo.authCode.send',
-  eligibleScopesResolve: 'piwigo.eligibleScopes.resolve',
   albumUploadObserved: 'piwigo.albumUploadObserved'
 } as const;
 
@@ -32,7 +27,7 @@ export const piwigoGalleryDatabases = [{
 export const piwigoGalleryManifest: PluginManifest = {
   pluginId: PIWIGO_GALLERY_PLUGIN_ID,
   kind: 'managed_group',
-  version: '0.15.0',
+  version: '0.16.0',
   coreApiRange: '>=0.2.0',
   messageNamespace: 'official.piwigo-gallery',
   descriptionKey: 'official.piwigo-gallery.description',
@@ -40,8 +35,7 @@ export const piwigoGalleryManifest: PluginManifest = {
   commands: [
     '/gallery status',
     '/gallery configure',
-    '/gallery upload',
-    '/gallery signup'
+    '/gallery upload'
   ],
   help: {
     featureId: 'gallery',
@@ -77,17 +71,6 @@ export const piwigoGalleryManifest: PluginManifest = {
           currentManagedGroupMembershipMode: 'effective_scope',
           allowCurrentManagedGroupMemberConfigPath: 'access.allowScopeMemberUploads'
         }
-      },
-      {
-        topicId: 'link-gallery-account',
-        titleKey: 'official.piwigo-gallery.help.account.title',
-        summaryKey: 'official.piwigo-gallery.help.account.summary',
-        order: 40,
-        commands: ['/gallery signup'],
-        instructionKeys: ['official.piwigo-gallery.help.account.instruction'],
-        exampleKeys: ['official.piwigo-gallery.help.register.example'],
-        keywords: ['account', 'link', 'signup', 'register', 'confirmation'],
-        availability: { invocation: 'either' }
       }
     ]
   },
@@ -104,50 +87,13 @@ export const piwigoGalleryManifest: PluginManifest = {
     PIWIGO_GALLERY_ANNOUNCE_NEW_ALBUM_JOB,
     PIWIGO_GALLERY_MEDIA_DUMP_HINT_JOB
   ],
-  externalActions: [
-    {
-      actionId: PIWIGO_GALLERY_EXTERNAL_ACTIONS.whatsappLinkRequestStart,
-      access: 'mutation',
-      scope: 'account',
-      timeoutMs: 30_000,
-      description: 'Start a Piwigo account-link request through a known WhatsApp contact.'
-    },
-    {
-      actionId: PIWIGO_GALLERY_EXTERNAL_ACTIONS.whatsappRegistrationOtpStart,
-      access: 'mutation',
-      scope: 'account',
-      timeoutMs: 30_000,
-      description: 'Send and persist a WhatsApp registration OTP.'
-    },
-    {
-      actionId: PIWIGO_GALLERY_EXTERNAL_ACTIONS.whatsappRegistrationOtpVerify,
-      access: 'mutation',
-      scope: 'account',
-      timeoutMs: 30_000,
-      description: 'Verify and consume a WhatsApp registration OTP.'
-    },
-    {
-      actionId: PIWIGO_GALLERY_EXTERNAL_ACTIONS.authCodeSend,
-      access: 'mutation',
-      scope: 'scope',
-      timeoutMs: 30_000,
-      description: 'Deliver a scoped Piwigo authentication code through WhatsApp.'
-    },
-    {
-      actionId: PIWIGO_GALLERY_EXTERNAL_ACTIONS.eligibleScopesResolve,
-      access: 'read',
-      scope: 'account',
-      timeoutMs: 30_000,
-      description: 'Resolve Piwigo-enabled scopes available to a WhatsApp identity.'
-    },
-    {
+  externalActions: [{
       actionId: PIWIGO_GALLERY_EXTERNAL_ACTIONS.albumUploadObserved,
       access: 'mutation',
       scope: 'scope',
       timeoutMs: 30_000,
       description: 'Observe a scoped Piwigo album upload and schedule its WhatsApp announcement.'
-    }
-  ],
+  }],
   databases: piwigoGalleryDatabases,
   dataVersion: '10',
   dependencies: [
@@ -179,11 +125,10 @@ export const piwigoGalleryManifest: PluginManifest = {
     ]
   },
   assistant: {
-    summary: 'Piwigo gallery upload workflow for collecting WhatsApp documents, linking users, and finalizing gallery batches.',
+    summary: 'Piwigo gallery upload workflow for collecting WhatsApp documents and finalizing gallery batches.',
     useCases: [
       'Explain whether gallery uploads are configured for the current scope.',
-      'Start and manage a guided gallery upload flow.',
-      'Help users link or register a Piwigo account.'
+      'Start and manage a guided gallery upload flow.'
     ],
     prerequisites: [
       'enabled=true in the target scope.',
@@ -205,11 +150,6 @@ export const piwigoGalleryManifest: PluginManifest = {
         intent: 'gallery_upload',
         description: 'Start, finalize, or cancel a guided gallery upload batch.',
         commands: ['/gallery upload']
-      },
-      {
-        intent: 'gallery_account',
-        description: 'Register a linked gallery account; existing-account link requests open a guided WhatsApp confirmation automatically.',
-        commands: ['/gallery signup']
       }
     ]
   }

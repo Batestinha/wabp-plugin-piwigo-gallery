@@ -8,6 +8,7 @@ import {
 import type { GalleryAlbumSource } from './albumMetadata';
 import type { GalleryConnection } from './config';
 import type { TopomareGalleryPrincipal } from './topomarePrincipal';
+import { assertPiwigoGalleryOutboundMethod } from './uploadOnlyBoundary';
 
 export interface PiwigoAcceptedTypes {
   extensions: string[];
@@ -524,6 +525,7 @@ export class PiwigoGalleryClient {
     timeoutMs = this.timeoutMs,
     maxResponseBytes = PIWIGO_GALLERY_MAX_JSON_RESPONSE_BYTES
   ): Promise<T> {
+    assertPiwigoGalleryOutboundMethod(method);
     const bearer = await this.#tokens.accessToken();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);

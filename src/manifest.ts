@@ -1,8 +1,9 @@
 import type { PluginManifest } from '../../../platform/pluginRuntime/manifest';
 import { piwigoGalleryConfigSchema } from './config';
 import { piwigoGalleryMessages } from './messages';
+import { piwigoGalleryUploadOnlyBoundary } from './uploadOnlyBoundary';
 
-export const PIWIGO_GALLERY_PLUGIN_ID = 'official.piwigo-gallery';
+export const PIWIGO_GALLERY_PLUGIN_ID = piwigoGalleryUploadOnlyBoundary.pluginId;
 export const PIWIGO_GALLERY_DATABASE = 'gallery';
 export const PIWIGO_GALLERY_FINALIZE_JOB = 'piwigo-gallery.finalize';
 export const PIWIGO_GALLERY_ANNOUNCE_NEW_ALBUM_JOB = 'piwigo-gallery.announce-new-album';
@@ -12,12 +13,12 @@ export const PIWIGO_GALLERY_SUBJECT_CUTOVER_APPROVAL =
   `${PIWIGO_GALLERY_DATABASE}:${PIWIGO_GALLERY_SUBJECT_CUTOVER_MIGRATION}`;
 
 export const PIWIGO_GALLERY_EXTERNAL_ACTIONS = {
-  albumUploadObserved: 'piwigo.albumUploadObserved'
+  albumUploadObserved: piwigoGalleryUploadOnlyBoundary.inboundPiwigoCallback.action
 } as const;
 
 export const PIWIGO_GALLERY_PERMISSIONS = {
-  configure: 'piwigo-gallery.configure',
-  upload: 'piwigo-gallery.upload'
+  configure: piwigoGalleryUploadOnlyBoundary.permissions[0],
+  upload: piwigoGalleryUploadOnlyBoundary.permissions[1]
 } as const;
 
 export const piwigoGalleryDatabases = [{
@@ -31,16 +32,12 @@ export const piwigoGalleryDatabases = [{
 export const piwigoGalleryManifest: PluginManifest = {
   pluginId: PIWIGO_GALLERY_PLUGIN_ID,
   kind: 'managed_group',
-  version: '0.17.0',
+  version: '0.17.1',
   coreApiRange: '>=0.2.0',
   messageNamespace: 'official.piwigo-gallery',
   descriptionKey: 'official.piwigo-gallery.description',
   defaultMessages: piwigoGalleryMessages,
-  commands: [
-    '/gallery status',
-    '/gallery configure',
-    '/gallery upload'
-  ],
+  commands: [...piwigoGalleryUploadOnlyBoundary.commands],
   help: {
     featureId: 'gallery',
     titleKey: 'official.piwigo-gallery.help.feature.title',

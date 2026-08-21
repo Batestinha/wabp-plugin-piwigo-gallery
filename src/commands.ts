@@ -73,6 +73,7 @@ import {
   FederatedTopomareGalleryPrincipalResolver,
   type TopomareGalleryPrincipal
 } from './topomarePrincipal';
+import { assertPiwigoGalleryCommandRoute } from './uploadOnlyBoundary';
 
 const SCOPE_TARGET: CommandTargetSpec = {
   kind: 'scope',
@@ -121,6 +122,7 @@ export function registerPiwigoGalleryCommands(context: PluginCommandContext): vo
   context.flowEngine.register(uploadFlowDefinition);
   registerUploadFlowCompletionHandler(context);
 
+  assertPiwigoGalleryCommandRoute('gallery', 'status');
   router.register('gallery', 'status', galleryAdminCommand({
     mutation: 'none',
     auditAction: 'piwigo-gallery.status',
@@ -154,6 +156,7 @@ export function registerPiwigoGalleryCommands(context: PluginCommandContext): vo
     };
   });
 
+  assertPiwigoGalleryCommandRoute('gallery', 'configure');
   router.register('gallery', 'configure', galleryAdminCommand({
     auditAction: 'piwigo-gallery.configure',
     usage: '/gallery configure enabled=yes auto=30 max=536870912',
@@ -181,6 +184,7 @@ export function registerPiwigoGalleryCommands(context: PluginCommandContext): vo
     return { handled: true, text: t('official.piwigo-gallery.configUpdated') };
   });
 
+  assertPiwigoGalleryCommandRoute('gallery', 'upload');
   router.register('gallery', 'upload', galleryUploadCommand({
     auditAction: 'piwigo-gallery.upload.route',
     usage: '/gallery upload',

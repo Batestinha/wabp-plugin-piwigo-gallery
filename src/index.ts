@@ -3,6 +3,9 @@ import { registerPiwigoGalleryCancellations, registerPiwigoGalleryCommands } fro
 import { createPiwigoGalleryHooks } from './hooks';
 import { createPiwigoGalleryExternalActions } from './externalActions';
 import { piwigoGalleryManifest } from './manifest';
+import { assertPiwigoGalleryPluginManifestBoundary } from './uploadOnlyBoundary';
+
+assertPiwigoGalleryPluginManifestBoundary(piwigoGalleryManifest);
 
 export const piwigoGalleryPlugin: BotPlugin = {
   manifest: piwigoGalleryManifest,

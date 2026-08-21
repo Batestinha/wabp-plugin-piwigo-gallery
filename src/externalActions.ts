@@ -19,6 +19,7 @@ import {
   type StoredPiwigoAlbumAnnouncement
 } from './store';
 import { preparedGalleryDatabase } from './storageRuntime';
+import { assertPiwigoGalleryExternalAction } from './uploadOnlyBoundary';
 
 export const piwigoGalleryExternalActionSchemas = {
   albumUploadObserved: z.object({
@@ -54,6 +55,7 @@ export function createPiwigoGalleryExternalActions(
   context: PluginExternalActionRegistrationContext
 ): AnyExternalActionRegistration[] {
   const runtime = new PiwigoGalleryExternalActionRuntime(context);
+  assertPiwigoGalleryExternalAction(PIWIGO_GALLERY_EXTERNAL_ACTIONS.albumUploadObserved);
   return [{
     actionId: PIWIGO_GALLERY_EXTERNAL_ACTIONS.albumUploadObserved,
     inputSchema: piwigoGalleryExternalActionSchemas.albumUploadObserved,

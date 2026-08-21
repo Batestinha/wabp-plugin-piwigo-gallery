@@ -1,0 +1,67 @@
+{
+  "allowedCapabilities": [
+    "integration-status",
+    "media-type-discovery",
+    "subject-bound-gallery-authorization",
+    "upload-context-resolution",
+    "media-upload",
+    "upload-derived-announcement-media-download",
+    "upload-observation"
+  ],
+  "boundaryPurpose": "authorized-gallery-upload-workflow-only",
+  "commands": [
+    "/gallery status",
+    "/gallery configure",
+    "/gallery upload"
+  ],
+  "contractId": "topomare.wabp-piwigo-gallery-upload-only.v1",
+  "credentialAuthority": "topomare-central-identity",
+  "forbiddenEndUserCapabilities": [
+    "account-linking",
+    "authentication",
+    "credential-migration",
+    "credential-validation",
+    "login",
+    "one-time-password",
+    "password",
+    "password-reset",
+    "registration"
+  ],
+  "inboundPiwigoCallback": {
+    "action": "piwigo.albumUploadObserved",
+    "authorization": "topomare-oidc-service-bearer",
+    "httpMethod": "POST",
+    "path": "/integrations/piwigo/album-upload-observed"
+  },
+  "legacyRuntime": {
+    "accountLinking": "forbidden",
+    "credentialVerification": "forbidden",
+    "oneTimePasswords": "forbidden",
+    "registration": "forbidden",
+    "requiredRemovalMigration": "011_topomare_subject_cutover.sql",
+    "state": "subject-bound-only"
+  },
+  "outboundPiwigoApi": {
+    "authorization": {
+      "endUserCredentialDelegation": false,
+      "kind": "topomare-oidc-client-credentials-bearer"
+    },
+    "format": "json",
+    "httpMethod": "POST",
+    "methods": [
+      "topomare.gallery.integrationStatus",
+      "topomare.gallery.acceptedMediaTypes",
+      "topomare.gallery.peopleForSubject",
+      "topomare.gallery.resolveUploadForSubject",
+      "topomare.gallery.uploadForSubject",
+      "topomare.gallery.downloadAnnouncementMedia"
+    ],
+    "path": "/ws.php"
+  },
+  "permissions": [
+    "piwigo-gallery.configure",
+    "piwigo-gallery.upload"
+  ],
+  "pluginId": "official.piwigo-gallery",
+  "schemaVersion": 1
+}

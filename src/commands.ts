@@ -101,6 +101,13 @@ export interface GalleryUploadTarget {
 
 type GalleryUploadTargetResolution =
   | { kind: 'resolved'; target: GalleryUploadTarget; t: TranslateFn }
+  | {
+      kind: 'selection';
+      selection: {
+        question: string;
+        choices: Array<{ id: string; label: string; scopeId: string }>;
+      };
+    }
   | { kind: 'reply'; text: string };
 
 export type PrivateGalleryScopeSelection =
@@ -527,6 +534,13 @@ async function startUploadFlow(
   if (resolution.kind === 'reply') {
     return { handled: true, text: resolution.text };
   }
+  if (resolution.kind === 'selection') {
+    return {
+      handled: true,
+      response: { kind: 'none' as const },
+      privateManagedTargetSelection: resolution.selection
+    };
+  }
   const { target, t } = resolution;
   const db = await preparedGalleryDatabase(runtime.databases);
   const collectionChatId = ctx.message.context === 'private' ? ctx.message.chatId : target.groupWid;
@@ -697,11 +711,14 @@ async function resolvePrivateGalleryUploadTarget(
     return { kind: 'reply', text: fallbackT('official.piwigo-gallery.notConfigured') };
   }
 
+  const selectedScope = ctx.privateManagedTargetId?.trim();
   const explicitScope = ctx.targets?.scope?.source === 'flag'
     ? ctx.targets.scope.raw?.trim()
     : undefined;
-  const eligible = explicitScope
-    ? configured.filter((candidate) => galleryScopeMatches(candidate, explicitScope))
+  const eligible = selectedScope
+    ? configured.filter((candidate) => candidate.scopeId === selectedScope)
+    : explicitScope
+      ? configured.filter((candidate) => galleryScopeMatches(candidate, explicitScope))
     : configured;
   if (eligible.length === 0) {
     return { kind: 'reply', text: fallbackT('official.piwigo-gallery.notConfigured') };
@@ -729,10 +746,20 @@ async function resolvePrivateGalleryUploadTarget(
   if (selection.kind === 'multiple') {
     const t = await piwigoCommandTranslator(context, ctx, selection.candidates[0]?.scopeId);
     return {
-      kind: 'reply',
-      text: t('official.piwigo-gallery.multipleAuthorizedGalleries', {
-        choices: formatGalleryScopeChoices(selection.candidates)
-      })
+      kind: 'selection',
+      selection: {
+        question: t('official.piwigo-gallery.galleryScopeQuestion'),
+        choices: [...selection.candidates]
+          .sort((left, right) =>
+            (left.scopeLabel ?? left.label).localeCompare(right.scopeLabel ?? right.label)
+            || left.scopeId.localeCompare(right.scopeId)
+          )
+          .map((candidate) => ({
+            id: candidate.scopeId,
+            scopeId: candidate.scopeId,
+            label: candidate.scopeLabel?.trim() || candidate.label
+          }))
+      }
     };
   }
   const candidate = selection.candidate;
@@ -841,16 +868,6 @@ function galleryScopeMatches(candidate: ConfiguredPiwigoGalleryScope, input: str
 
 function normalizeGalleryTarget(value: string): string {
   return value.trim().replace(/\s+/g, ' ').toLocaleLowerCase();
-}
-
-function formatGalleryScopeChoices(candidates: ConfiguredPiwigoGalleryScope[]): string {
-  return [...candidates]
-    .sort((left, right) =>
-      (left.scopeLabel ?? left.label).localeCompare(right.scopeLabel ?? right.label)
-      || left.scopeId.localeCompare(right.scopeId)
-    )
-    .map((candidate) => `• ${candidate.scopeLabel?.trim() || candidate.label} — ${candidate.scopeId}`)
-    .join('\n');
 }
 
 function managementModeRank(mode: ConfiguredPiwigoGalleryScope['managementMode']): number {

@@ -26,8 +26,12 @@ SELECT
        WHERE status = 'pending'
           OR claim_id IS NOT NULL
           OR claim_expires_at IS NOT NULL)
-  + (SELECT COUNT(*) FROM gallery_album_announcement_files
-       WHERE delivery_status IN ('pending', 'dispatching'));
+  + (SELECT COUNT(*)
+       FROM gallery_album_announcement_files AS file
+       JOIN gallery_album_announcements AS announcement
+         ON announcement.id = file.announcement_id
+      WHERE file.delivery_status = 'dispatching'
+         OR (file.delivery_status = 'pending' AND announcement.status = 'pending'));
 
 DROP TABLE gallery_topomare_subject_cutover_guard;
 

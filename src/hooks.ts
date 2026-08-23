@@ -10,7 +10,8 @@ import { enqueuePluginJob } from '../../../platform/jobs/queue';
 import {
   galleryConnectionDefaultsFromAppConfig,
   parsePiwigoGalleryConfig,
-  renderPiwigoAlbumAnnouncementTemplate
+  renderPiwigoAlbumAnnouncementTemplate,
+  renderPiwigoMediaDumpDocumentsHint
 } from './config';
 import {
   PIWIGO_GALLERY_ANNOUNCE_NEW_ALBUM_JOB,
@@ -89,6 +90,8 @@ interface MediaDumpHintPayload {
   chatId: string;
   messageId: string;
   actorIdentityId: string;
+  actorDisplayName?: string | undefined;
+  chatSurface: 'group' | 'private';
 }
 
 interface ReleaseReadyGalleryBatchSubject {
@@ -337,6 +340,9 @@ function enqueueMediaDumpHint(
   event: PluginMessageEvent,
   actorIdentityId: string
 ): PluginAction {
+  const actorDisplayName = event.message.senderDisplayName?.trim()
+    || event.actor.identityAddress.displayName?.trim()
+    || undefined;
   return {
     type: 'plugin.enqueueJob',
     pluginId: PIWIGO_GALLERY_PLUGIN_ID,
@@ -346,7 +352,9 @@ function enqueueMediaDumpHint(
     payload: {
       chatId: event.message.chatId,
       messageId: event.message.id,
-      actorIdentityId
+      actorIdentityId,
+      ...(actorDisplayName ? { actorDisplayName } : {}),
+      chatSurface: event.message.context
     },
     dedupeKey: `${PIWIGO_GALLERY_MEDIA_DUMP_HINT_JOB}:${event.scopeId}:${event.message.chatId}:${actorIdentityId}:${event.message.id}`
   };
@@ -367,7 +375,12 @@ async function sendMediaDumpHint(
   if (!await actorCanUpload(context, {
     scopeId: job.scopeId,
     actorIdentityId: payload.actorIdentityId,
-    groupWid: payload.chatId,
+    ...(job.groupId?.trim() ? { groupId: job.groupId.trim() } : {}),
+    ...(job.groupWid?.trim()
+      ? { groupWid: job.groupWid.trim() }
+      : payload.chatSurface === 'group'
+        ? { groupWid: payload.chatId }
+        : {}),
     allowScopeMemberUploads: config.access.allowScopeMemberUploads
   })) {
     return;
@@ -376,17 +389,35 @@ async function sendMediaDumpHint(
   if (await context.ephemeralStore.get(key)) {
     return;
   }
+  const source = config.mediaDumpDocumentsHint.trim()
+    ? config.mediaDumpDocumentsHint.trim()
+    : await t(context, job.scopeId, payload.actorIdentityId, 'official.piwigo-gallery.mediaDumpDocumentsHint');
   await context.ephemeralStore.set(key, {
     messageId: payload.messageId,
     remindedAt: job.runAt.toISOString()
   }, MEDIA_DUMP_REMINDER_COOLDOWN_SECONDS);
+  let text: string;
+  try {
+    text = renderPiwigoMediaDumpDocumentsHint(source, {
+      actorDisplayName: payload.actorDisplayName,
+      isGroup: payload.chatSurface === 'group' ? 'true' : undefined,
+      isPrivate: payload.chatSurface === 'private' ? 'true' : undefined
+    }).trim();
+  } catch {
+    return [{
+      type: 'audit.record',
+      action: 'piwigo-gallery.media-dump-hint.skipped',
+      metadataJson: { reason: 'template-invalid' }
+    }];
+  }
+  if (!text) {
+    return;
+  }
   return [{
     type: 'message.sendText',
     chatId: payload.chatId,
     quotedMessageId: payload.messageId,
-    text: config.mediaDumpDocumentsHint.trim()
-      ? config.mediaDumpDocumentsHint.trim()
-      : await t(context, job.scopeId, payload.actorIdentityId, 'official.piwigo-gallery.mediaDumpDocumentsHint')
+    text
   }];
 }
 
@@ -1524,12 +1555,7 @@ async function dispatchNextAnnouncementFile(
       site: announcement.siteLabel,
       user: announcement.userDisplayName
     };
-    const caption = config.newAlbumAnnouncementTemplate
-      ? renderPiwigoAlbumAnnouncementTemplate(config.newAlbumAnnouncementTemplate, captionValues)
-      : (await context.i18n.translatorForScope(announcement.scopeId))(
-          'official.piwigo-gallery.albumAnnouncementCaption',
-          captionValues
-        );
+    const caption = await albumAnnouncementCaption(context, announcement, config.newAlbumAnnouncementTemplate, captionValues);
     return [
       announcementClaimRecoveryAction(announcement),
       {
@@ -1540,7 +1566,7 @@ async function dispatchNextAnnouncementFile(
           mimeType: file.mimeType,
           buffer: file.buffer
         },
-        ...(selected[0]?.position === next.position ? { caption } : {}),
+        ...(selected[0]?.position === next.position && caption ? { caption } : {}),
         waitUntilMsgSent: true,
         abortBatchOnFailure: true,
         idempotencyKey: announcementFileIdempotencyKey(announcement, next.position)
@@ -1795,6 +1821,29 @@ function announcementClaimRecoveryAction(announcement: PiwigoAlbumAnnouncement):
   };
 }
 
+async function albumAnnouncementCaption(
+  context: PluginRuntimeContext,
+  announcement: PiwigoAlbumAnnouncement,
+  configuredTemplate: string,
+  values: Record<'album' | 'site' | 'user', string>
+): Promise<string> {
+  const source = configuredTemplate
+    || (await context.i18n.translatorForScope(announcement.scopeId))(
+      'official.piwigo-gallery.albumAnnouncementCaption'
+    );
+  try {
+    return renderPiwigoAlbumAnnouncementTemplate(source, values).trim();
+  } catch {
+    context.logger.warn({
+      pluginId: PIWIGO_GALLERY_PLUGIN_ID,
+      scopeId: announcement.scopeId,
+      announcementId: announcement.id,
+      field: 'newAlbumAnnouncementTemplate'
+    }, 'Piwigo album announcement caption template is invalid; sending media without a caption');
+    return '';
+  }
+}
+
 async function announcementTargetBelongsToScope(
   context: PluginRuntimeContext,
   scopeId: string,
@@ -1872,7 +1921,17 @@ function mediaDumpHintPayloadFromJob(payload: unknown): MediaDumpHintPayload | u
   return {
     chatId,
     messageId,
-    actorIdentityId
+    actorIdentityId,
+    ...(typeof value.actorDisplayName === 'string' && value.actorDisplayName.trim()
+      ? { actorDisplayName: value.actorDisplayName.trim() }
+      : {}),
+    chatSurface: value.chatSurface === 'private'
+      ? 'private'
+      : value.chatSurface === 'group'
+        ? 'group'
+        : chatId.toLowerCase().endsWith('@g.us')
+          ? 'group'
+          : 'private'
   };
 }
 

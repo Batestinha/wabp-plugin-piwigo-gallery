@@ -84,7 +84,19 @@ export const piwigoGalleryControls: ControlDescriptor[] = [
     ui: {
       widget: 'text',
       placeholder: piwigoGalleryMessages['official.piwigo-gallery.mediaDumpDocumentsHint'],
-      helpText: `Custom WhatsApp reply for media-dump albums. Leave empty to use the default localized message: ${piwigoGalleryMessages['official.piwigo-gallery.mediaDumpDocumentsHint']}`
+      helpText: `Custom WhatsApp reply for media-dump albums. Leave empty to use the default localized message: ${piwigoGalleryMessages['official.piwigo-gallery.mediaDumpDocumentsHint']}`,
+      multiline: true,
+      templateDialect: 'conditional-presence-v1',
+      templateActivation: 'when-used',
+      templateVariables: [
+        { token: 'actorDisplayName', label: 'Sender display name', sampleValue: 'Diogo' }
+      ],
+      templateConditionVariables: [
+        { token: 'actorDisplayName', label: 'Sender display name', sampleValue: 'Diogo' },
+        { token: 'isGroup', label: 'Group chat', sampleValue: 'true' },
+        { token: 'isPrivate', label: 'Private chat', sampleValue: 'true' }
+      ],
+      templateEmptyResult: 'suppress'
     }
   }),
   control({
@@ -128,11 +140,19 @@ export const piwigoGalleryControls: ControlDescriptor[] = [
       placeholder: piwigoGalleryMessages['official.piwigo-gallery.albumAnnouncementCaption'],
       helpText: 'Use {album}, {site}, and {user}. Leave empty to use the localized message for the scope.',
       multiline: true,
+      templateDialect: 'conditional-presence-v1',
+      templateActivation: 'when-condition-used',
       templateVariables: [
-        { token: 'album', label: 'Album name' },
-        { token: 'site', label: 'Gallery site' },
-        { token: 'user', label: 'Uploader' }
-      ]
+        { token: 'album', label: 'Album name', sampleValue: 'Summer Walk' },
+        { token: 'site', label: 'Gallery site', sampleValue: 'Community Gallery' },
+        { token: 'user', label: 'Uploader', sampleValue: 'Diogo' }
+      ],
+      templateConditionVariables: [
+        { token: 'album', label: 'Album name', sampleValue: 'Summer Walk' },
+        { token: 'site', label: 'Gallery site', sampleValue: 'Community Gallery' },
+        { token: 'user', label: 'Uploader', sampleValue: 'Diogo' }
+      ],
+      templateEmptyResult: 'suppress'
     }
   })
 ];

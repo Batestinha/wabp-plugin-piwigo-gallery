@@ -1,6 +1,12 @@
 import { z } from 'zod';
 import type { AppConfig } from '../../../platform/config/runtimeConfig';
 import { parseCanonicalHttpsIssuer } from '../../../platform/identity/clientCredentialsTokenProvider';
+import {
+  conditionalTemplateHasCondition,
+  renderConditionalTemplateIfActive,
+  validateConditionalTemplate,
+  validateConditionalTemplateIfActive
+} from '../../../platform/templates/conditionalTemplate';
 
 export const PIWIGO_GALLERY_DEFAULT_BASE_URL_ENV = 'PIWIGO_GALLERY_DEFAULT_BASE_URL';
 export const TOPOMARE_OIDC_ISSUER_ENV = 'TOPOMARE_OIDC_ISSUER';
@@ -12,17 +18,34 @@ export const TOPOMARE_WABP_PROVIDER_NAMESPACE_ENV = 'TOPOMARE_WABP_PROVIDER_NAME
 export const TOPOMARE_PIWIGO_PROVIDER_NAMESPACE_ENV = 'TOPOMARE_PIWIGO_PROVIDER_NAMESPACE';
 export const PIWIGO_GALLERY_UNLIMITED_FILE_BYTES = Number.MAX_SAFE_INTEGER;
 export const PIWIGO_ALBUM_ANNOUNCEMENT_TEMPLATE_TOKENS = ['album', 'site', 'user'] as const;
+export const PIWIGO_MEDIA_DUMP_HINT_TEMPLATE_TOKENS = ['actorDisplayName', 'isGroup', 'isPrivate'] as const;
 
 const piwigoAlbumAnnouncementTemplateSchema = z.string().trim().max(500).superRefine((template, ctx) => {
   const allowed = new Set<string>(PIWIGO_ALBUM_ANNOUNCEMENT_TEMPLATE_TOKENS);
-  for (const match of template.matchAll(/\{([A-Za-z][A-Za-z0-9_-]*)\}/g)) {
-    const token = match[1]!;
-    if (!allowed.has(token)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: `unknown announcement template variable {${token}}`
-      });
+  if (!conditionalTemplateHasCondition(template)) {
+    for (const match of template.matchAll(/\{([A-Za-z][A-Za-z0-9_-]*)\}/g)) {
+      const token = match[1] ?? '';
+      if (!allowed.has(token)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: `unknown announcement template variable {${token}}` });
+      }
     }
+  }
+  for (const issue of conditionalTemplateHasCondition(template)
+    ? validateConditionalTemplate(template, PIWIGO_ALBUM_ANNOUNCEMENT_TEMPLATE_TOKENS)
+    : []) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: issue.message
+    });
+  }
+});
+
+const piwigoMediaDumpHintSchema = z.string().trim().max(500).superRefine((template, ctx) => {
+  for (const issue of validateConditionalTemplateIfActive(template, PIWIGO_MEDIA_DUMP_HINT_TEMPLATE_TOKENS)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: issue.message
+    });
   }
 });
 
@@ -33,7 +56,7 @@ export const piwigoGalleryConfigSchema = z.object({
   access: z.object({
     allowScopeMemberUploads: z.boolean().default(false)
   }).default({}),
-  mediaDumpDocumentsHint: z.string().trim().max(500).default(''),
+  mediaDumpDocumentsHint: piwigoMediaDumpHintSchema.default(''),
   newAlbumAnnouncementsEnabled: z.boolean().default(false),
   announcementGroupWid: z.string().trim().regex(/^[^\s@]+@g\.us$/i).or(z.literal('')).default(''),
   newAlbumAnnouncementTemplate: piwigoAlbumAnnouncementTemplateSchema.default(''),
@@ -68,7 +91,17 @@ export function renderPiwigoAlbumAnnouncementTemplate(
   template: string,
   values: Record<(typeof PIWIGO_ALBUM_ANNOUNCEMENT_TEMPLATE_TOKENS)[number], string>
 ): string {
+  if (conditionalTemplateHasCondition(template)) {
+    return renderConditionalTemplateIfActive(template, PIWIGO_ALBUM_ANNOUNCEMENT_TEMPLATE_TOKENS, values);
+  }
   return template.replace(/\{(album|site|user)\}/g, (_, token: keyof typeof values) => values[token]);
+}
+
+export function renderPiwigoMediaDumpDocumentsHint(
+  template: string,
+  values: Readonly<Record<(typeof PIWIGO_MEDIA_DUMP_HINT_TEMPLATE_TOKENS)[number], string | undefined>>
+): string {
+  return renderConditionalTemplateIfActive(template, PIWIGO_MEDIA_DUMP_HINT_TEMPLATE_TOKENS, values);
 }
 
 /**

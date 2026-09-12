@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto';
-import type { FlowEngine } from '../../../adminBot/flows/flowEngine';
+import type { FlowEngine } from './runtime';
 import type {
   PluginDatabase,
   PluginDatabaseRow,
   PluginDatabaseRegistry
-} from '../../../platform/pluginRuntime/runtime/pluginDatabase';
+} from '../../../../packages/plugin-sdk/src/database';
 import {
   galleryDatabase,
   deleteDraft,

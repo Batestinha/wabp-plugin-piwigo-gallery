@@ -1,0 +1,12 @@
+import type { GalleryDeploymentConfig } from './deploymentConfig';
+import type { ManagedGroupPlugin, ManagedGroupCommandContext, ManagedGroupRuntimeContext } from '../../../../packages/plugin-sdk/src/managed-group-plugin';
+export { requireManagedGroupCommandRuntime as requireOfficialCommandRuntime } from '../../../../packages/plugin-sdk/src/managed-group-plugin';
+export { requireScopeId, parseBoolean } from '../../../../packages/plugin-sdk/src/commands';
+export type BotPlugin = ManagedGroupPlugin<GalleryDeploymentConfig>;
+export type PluginCommandContext = ManagedGroupCommandContext<GalleryDeploymentConfig>;
+export type PluginRuntimeContext = ManagedGroupRuntimeContext<GalleryDeploymentConfig>;
+export type PluginExternalActionRegistrationContext = ManagedGroupRuntimeContext<GalleryDeploymentConfig>;
+export type { PluginCancellationRegistration, PluginCancellationRequest } from '../../../../packages/plugin-sdk/src/cancellations';
+export type { PluginJobEvent, PluginMessageEvent, PluginRuntimeHooks } from '../../../../packages/plugin-sdk/src/hooks';
+export type { DurableFlowEngine as FlowEngine } from '../../../../packages/plugin-sdk/src/durable-flow';
+export type { FlowSessionSnapshot } from '../../../../packages/plugin-sdk/src/flow-engine';

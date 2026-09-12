@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { eventAlbumSourceSchema } from '../community-events/serviceApi';
+import { eventAlbumSourceSchema } from './contracts/community-events.v1';
 
 export const galleryAlbumSourceSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('manual') }).strict(),

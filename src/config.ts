@@ -1,12 +1,12 @@
 import { z } from 'zod';
-import type { AppConfig } from '../../../platform/config/runtimeConfig';
-import { parseCanonicalHttpsIssuer } from '../../../platform/identity/clientCredentialsTokenProvider';
+import type { AppConfig } from './deploymentConfig';
+import { parseCanonicalHttpsIssuer } from '../../../../packages/plugin-sdk/src/client-credentials';
 import {
   conditionalTemplateHasCondition,
   renderConditionalTemplateIfActive,
   validateConditionalTemplate,
   validateConditionalTemplateIfActive
-} from '../../../platform/templates/conditionalTemplate';
+} from '../../../../packages/plugin-sdk/src/templates';
 
 export const PIWIGO_GALLERY_DEFAULT_BASE_URL_ENV = 'PIWIGO_GALLERY_DEFAULT_BASE_URL';
 export const TOPOMARE_OIDC_ISSUER_ENV = 'TOPOMARE_OIDC_ISSUER';

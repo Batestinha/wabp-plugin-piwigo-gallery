@@ -1,10 +1,9 @@
-import type { CommandMetadata, CommandTargetSpec } from '../../../adminBot/router/commandMetadata';
-import type { CommandContext } from '../../../adminBot/router/commandRouter';
-import type { TranslateFn } from '../../../platform/i18n';
-import { logger } from '../../../platform/logging/logger';
-import type { PluginCancellationRegistration, PluginCancellationRequest, PluginCommandContext } from '../../../platform/pluginRuntime/types';
-import type { PrivateDeliveryFallback } from '../../../platform/transport/transportTypes';
-import type { MessageActor } from '../../../platform/identity/messageActor';
+import type { CommandMetadata, CommandTargetSpec } from '../../../../packages/plugin-sdk/src/command-metadata';
+import type { CommandContext } from '../../../../packages/plugin-sdk/src/commands';
+import type { TranslateFn } from '../../../../packages/plugin-sdk/src/i18n';
+import type { PluginCancellationRegistration, PluginCancellationRequest, PluginCommandContext } from './runtime';
+import type { PrivateDeliveryFallback } from '../../../../packages/plugin-sdk/src/transport';
+import type { MessageActor } from '../../../../packages/plugin-sdk/src/message-actor';
 import {
   EVENT_ALBUM_SOURCE_LIST_METHOD,
   EVENT_ALBUM_SOURCE_RESOLVE_METHOD,
@@ -12,13 +11,13 @@ import {
   type EventAlbumSource,
   type EventAlbumSourceListOutput,
   type EventAlbumSourceResolveOutput
-} from '../community-events/serviceApi';
-import { EVENTS_PLUGIN_ID } from '../community-events/manifest';
+} from './contracts/community-events.v1';
+const EVENTS_PLUGIN_ID = 'official.community-events';
 import {
   parseBoolean,
   requireOfficialCommandRuntime,
   requireScopeId
-} from '../shared';
+} from './runtime';
 import {
   galleryConnectionDefaultsFromAppConfig,
   parsePiwigoGalleryConfig,
@@ -374,19 +373,21 @@ async function peopleForPiwigoActor(
 }
 
 function topomareGalleryPrincipalResolver(
-  context: Pick<PluginCommandContext, 'config'>
+  context: Pick<PluginCommandContext, 'config' | 'identityAccess'>
 ): FederatedTopomareGalleryPrincipalResolver {
   return new FederatedTopomareGalleryPrincipalResolver(
     context.config.TOPOMARE_OIDC_ISSUER,
-    context.config.TOPOMARE_WABP_PROVIDER_NAMESPACE
+    context.config.TOPOMARE_WABP_PROVIDER_NAMESPACE,
+    context.identityAccess
   );
 }
 
 async function configuredPiwigoScopesForCommand(
+  context: PluginCommandContext,
   actor: PiwigoCommandActor,
   input: GalleryConnectionDefaults
 ): Promise<ConfiguredPiwigoGalleryScope[]> {
-  return listConfiguredPiwigoGalleryEligibleScopes(actor.identityId, input);
+  return listConfiguredPiwigoGalleryEligibleScopes(actor.identityId, { ...input, identityAccess: context.identityAccess });
 }
 
 async function routeGalleryUpload(
@@ -446,6 +447,7 @@ async function galleryUploadCommandMatchesBatch(
     return true;
   }
   const configured = await configuredPiwigoScopesForCommand(
+    context,
     actor,
     galleryConnectionDefaultsFromAppConfig(context.config)
   );
@@ -704,6 +706,7 @@ async function resolvePrivateGalleryUploadTarget(
 ): Promise<GalleryUploadTargetResolution> {
   const fallbackT = await piwigoCommandTranslator(context, ctx);
   const configured = await configuredPiwigoScopesForCommand(
+    context,
     actor,
     galleryConnectionDefaultsFromAppConfig(context.config)
   );
@@ -963,7 +966,7 @@ function registerUploadFlowCompletionHandler(context: PluginCommandContext): voi
           );
         }
       } catch (error) {
-        logger.warn({ error, scopeId: draft.scopeId }, 'Gallery draft subject revalidation failed');
+        context.logger?.warn({ error, scopeId: draft.scopeId }, 'Gallery draft subject revalidation failed');
       }
       if (!subjectStillAuthorized) {
         await activeTransport.sendText(
@@ -1097,7 +1100,7 @@ async function galleryEventCandidates(
     });
     return output.candidates;
   } catch (error) {
-    logger.warn({
+    context.logger?.warn({
       error,
       scopeId: target.scopeId,
       actorWid: ctx.message.senderWid
@@ -1135,7 +1138,7 @@ async function validateGalleryEventSource(
     }
     return output.event.revision === input.source.revision ? 'valid' : 'changed';
   } catch (error) {
-    logger.warn({
+    context.logger?.warn({
       error,
       scopeId: input.scopeId,
       eventId: input.source.eventId

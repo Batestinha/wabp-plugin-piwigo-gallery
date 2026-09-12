@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { enqueuePluginJob } from '../../../platform/jobs/queue';
-import type { PluginExternalActionRegistration } from '../../../platform/pluginRuntime/pluginExternalActions';
-import type { PluginDatabase } from '../../../platform/pluginRuntime/runtime/pluginDatabase';
-import type { PluginExternalActionRegistrationContext } from '../../../platform/pluginRuntime/types';
+import { enqueuePluginJob } from '../../../../packages/plugin-sdk/src/jobs';
+import type { PluginExternalActionRegistration } from '../../../../packages/plugin-sdk/src/external-actions';
+import type { PluginDatabase } from '../../../../packages/plugin-sdk/src/database';
+import type { PluginExternalActionRegistrationContext } from './runtime';
 import { parsePiwigoGalleryConfig } from './config';
 import {
   PIWIGO_GALLERY_ANNOUNCE_NEW_ALBUM_JOB,
@@ -367,7 +367,7 @@ function enqueueAlbumAnnouncement(
   const recoveryDedupeSuffix = recovery
     ? `:callback-recovery:v${announcement.version ?? 1}:r${announcement.downloadRetryCount ?? 0}:${dueAt}`
     : '';
-  return enqueuePluginJob(context.queue, {
+  return enqueuePluginJob(context, {
     pluginId: PIWIGO_GALLERY_PLUGIN_ID,
     jobName: PIWIGO_GALLERY_ANNOUNCE_NEW_ALBUM_JOB,
     scopeId: announcement.scopeId,

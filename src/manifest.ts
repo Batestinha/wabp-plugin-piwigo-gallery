@@ -1,4 +1,4 @@
-import type { PluginManifest } from '../../../platform/pluginRuntime/manifest';
+import type { PluginManifest } from '../../../../packages/plugin-sdk/src/manifest';
 import { piwigoGalleryConfigSchema } from './config';
 import { piwigoGalleryMessages } from './messages';
 import { piwigoGalleryUploadOnlyBoundary } from './uploadOnlyBoundary';
@@ -32,8 +32,8 @@ export const piwigoGalleryDatabases = [{
 export const piwigoGalleryManifest: PluginManifest = {
   pluginId: PIWIGO_GALLERY_PLUGIN_ID,
   kind: 'managed_group',
-  version: '0.17.1',
-  coreApiRange: '>=0.2.0',
+  version: '0.17.2',
+  coreApiRange: '^0.3.0',
   messageNamespace: 'official.piwigo-gallery',
   descriptionKey: 'official.piwigo-gallery.description',
   defaultMessages: piwigoGalleryMessages,

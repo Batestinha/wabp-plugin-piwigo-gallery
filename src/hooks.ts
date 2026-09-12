@@ -2,11 +2,11 @@ import type {
   PluginJobEvent,
   PluginMessageEvent,
   PluginRuntimeHooks
-} from '../../../platform/pluginRuntime/types';
-import type { PluginRuntimeContext } from '../../../platform/pluginRuntime/runtime/pluginRuntimeContext';
-import type { PluginAction } from '../../../platform/pluginRuntime/runtime/pluginActionTypes';
+} from './runtime';
+import type { PluginRuntimeContext } from './runtime';
+import type { PluginAction } from '../../../../packages/plugin-sdk/src/actions';
 import { randomUUID } from 'node:crypto';
-import { enqueuePluginJob } from '../../../platform/jobs/queue';
+import { enqueuePluginJob } from '../../../../packages/plugin-sdk/src/jobs';
 import {
   galleryConnectionDefaultsFromAppConfig,
   parsePiwigoGalleryConfig,
@@ -73,7 +73,7 @@ import {
   EVENT_ALBUM_SOURCE_RESOLVE_METHOD,
   EVENT_ALBUM_SOURCE_SERVICE_ID,
   type EventAlbumSourceResolveOutput
-} from '../community-events/serviceApi';
+} from './contracts/community-events.v1';
 
 const MEDIA_DUMP_REMINDER_COOLDOWN_SECONDS = 15 * 60;
 const MEDIA_DUMP_ALBUM_REPLY_DELAY_MS = 5_000;
@@ -115,7 +115,7 @@ export function createPiwigoGalleryHooks(context: PluginRuntimeContext): PluginR
   const databasePreparation = prepareAndReconcileGalleryDatabase(
     context.databases,
     {
-      enqueueJob: (job) => enqueuePluginJob(context.queue, {
+      enqueueJob: (job) => enqueuePluginJob(context, {
         pluginId: PIWIGO_GALLERY_PLUGIN_ID,
         ...job
       })
@@ -551,7 +551,8 @@ async function releaseReadyGalleryBatchSubject(
     }
     const principal = await new FederatedTopomareGalleryPrincipalResolver(
       connection.topomareOidcIssuer,
-      connection.topomareWabpProviderNamespace
+      connection.topomareWabpProviderNamespace,
+      context.identityAccess
     ).resolveForIdentity(batch.actorIdentityId);
     if (
       principal.topomareUserId !== batch.topomareUserId
@@ -1784,7 +1785,7 @@ async function enqueueBatchClaimRecovery(
   if (!claimId || !claimExpiresAt) {
     return;
   }
-  await enqueuePluginJob(context.queue, {
+  await enqueuePluginJob(context, {
     pluginId: PIWIGO_GALLERY_PLUGIN_ID,
     jobName: PIWIGO_GALLERY_FINALIZE_JOB,
     scopeId: batch.scopeId,

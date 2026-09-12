@@ -1,5 +1,5 @@
-import { defineControl } from '../../../platform/operatorConsole/controlCatalog/define';
-import type { ControlDescriptor, ControlSchemaMetadata, ControlUiHint } from '../../../platform/operatorConsole/controlCatalog/types';
+import { defineControl } from '../../../../packages/plugin-sdk/src/controls';
+import type { ControlDescriptor, ControlSchemaMetadata, ControlUiHint } from '../../../../packages/plugin-sdk/src/controls-types';
 import { PIWIGO_GALLERY_PLUGIN_ID } from './manifest';
 import { piwigoGalleryMessages } from './messages';
 

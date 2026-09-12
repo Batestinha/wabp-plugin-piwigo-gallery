@@ -1,13 +1,10 @@
 import { z } from 'zod';
-import {
-  FederatedSubjectLinkService,
-  type ActiveFederatedSubjectLink
-} from '../../../platform/identity/federatedSubjectLinkService';
+import type { PluginIdentityAccess, VerifiedFederatedSubject as ActiveFederatedSubjectLink } from '../../../../packages/plugin-sdk/src/identity-access';
 import {
   stableWaIdentityIdSchema,
   topomareUserIdSchema
-} from '../../../platform/identity/federatedSubjectLink';
-import { parseCanonicalHttpsIssuer } from '../../../platform/identity/clientCredentialsTokenProvider';
+} from '../../../../packages/plugin-sdk/src/identity-access';
+import { parseCanonicalHttpsIssuer } from '../../../../packages/plugin-sdk/src/client-credentials';
 
 const providerNamespaceSchema = z.string()
   .min(1)
@@ -36,8 +33,7 @@ export class FederatedTopomareGalleryPrincipalResolver implements TopomareGaller
   constructor(
     issuer: string,
     providerNamespace: string,
-    private readonly links: Pick<FederatedSubjectLinkService, 'resolveSubjectForIdentity'> =
-      new FederatedSubjectLinkService()
+    private readonly links: Pick<PluginIdentityAccess, 'resolveSubjectForIdentity'> = { resolveSubjectForIdentity: async () => { throw new Error('Host federated identity capability is unavailable'); } }
   ) {
     this.#issuer = parseCanonicalHttpsIssuer(issuer);
     this.#providerNamespace = providerNamespaceSchema.parse(providerNamespace);

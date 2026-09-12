@@ -1,8 +1,8 @@
-import type { FlowDefinition } from '../../../adminBot/flows/flowTypes';
-import type { FlowSessionSnapshot } from '../../../adminBot/flows/flowEngine';
-import type { TranslateFn } from '../../../platform/i18n';
+import type { FlowDefinition } from '../../../../packages/plugin-sdk/src/flow-types';
+import type { FlowSessionSnapshot } from './runtime';
+import type { TranslateFn } from '../../../../packages/plugin-sdk/src/i18n';
 import type { PiwigoPerson } from './piwigoClient';
-import type { EventAlbumSource } from '../community-events/serviceApi';
+import type { EventAlbumSource } from './contracts/community-events.v1';
 import { manualGalleryAlbumSource, type GalleryAlbumSource } from './albumMetadata';
 
 export const PIWIGO_GALLERY_UPLOAD_FLOW_TYPE = 'official.piwigo-gallery.upload.v1';

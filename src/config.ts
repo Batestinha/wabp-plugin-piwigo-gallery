@@ -1,12 +1,12 @@
 import { z } from 'zod';
 import type { AppConfig } from './deploymentConfig';
-import { parseCanonicalHttpsIssuer } from '../../../../packages/plugin-sdk/src/client-credentials';
+import { parseCanonicalHttpsIssuer } from '@wabs/plugin-sdk/client-credentials';
 import {
   conditionalTemplateHasCondition,
   renderConditionalTemplateIfActive,
   validateConditionalTemplate,
   validateConditionalTemplateIfActive
-} from '../../../../packages/plugin-sdk/src/templates';
+} from '@wabs/plugin-sdk/templates';
 
 export const PIWIGO_GALLERY_DEFAULT_BASE_URL_ENV = 'PIWIGO_GALLERY_DEFAULT_BASE_URL';
 export const TOPOMARE_OIDC_ISSUER_ENV = 'TOPOMARE_OIDC_ISSUER';

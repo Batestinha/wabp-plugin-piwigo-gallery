@@ -4,7 +4,7 @@ import type {
   PluginDatabase,
   PluginDatabaseRow,
   PluginDatabaseRegistry
-} from '../../../../packages/plugin-sdk/src/database';
+} from '@wabs/plugin-sdk/database';
 import {
   galleryDatabase,
   deleteDraft,

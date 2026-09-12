@@ -3,7 +3,7 @@ import type {
   PluginDatabase,
   PluginDatabaseRegistry,
   PluginDatabaseRow
-} from '../../../../packages/plugin-sdk/src/database';
+} from '@wabs/plugin-sdk/database';
 import type { GalleryConnection, GalleryConnectionDefaults, PiwigoGalleryConfig } from './config';
 import { configConnection } from './config';
 import { PIWIGO_GALLERY_DATABASE } from './manifest';

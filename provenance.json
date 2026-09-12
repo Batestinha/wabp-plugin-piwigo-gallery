@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "sourceRepository": "https://github.com/Batestinha/wabp",
+  "sourceCommit": "8b79dbad728af9aa483d72bef27669bf09689da3",
+  "sourceDirectory": "src/plugins/official/piwigo-gallery",
+  "sourceTreeSha": "dec4d74a53500d73f27d3d1c5866073aba756a36",
+  "extractedHistoryCommit": "494d15b863aebad8e41147255e46c4af8ea87da2",
+  "sdk": {
+    "version": "0.3.9",
+    "path": "vendor/wabs-plugin-sdk-0.3.9-657cd0f8661a.tgz",
+    "sha256": "657cd0f8661abdf20addf3155693965bf3d46a25941107795c905766fd51a8c3",
+    "sourceDirectory": "packages/plugin-sdk",
+    "sourceCommit": "8b79dbad728af9aa483d72bef27669bf09689da3"
+  },
+  "vendoredContracts": "contracts/provenance.json"
+}

@@ -4,9 +4,9 @@ import type {
   PluginRuntimeHooks
 } from './runtime';
 import type { PluginRuntimeContext } from './runtime';
-import type { PluginAction } from '../../../../packages/plugin-sdk/src/actions';
+import type { PluginAction } from '@wabs/plugin-sdk/actions';
 import { randomUUID } from 'node:crypto';
-import { enqueuePluginJob } from '../../../../packages/plugin-sdk/src/jobs';
+import { enqueuePluginJob } from '@wabs/plugin-sdk/jobs';
 import {
   galleryConnectionDefaultsFromAppConfig,
   parsePiwigoGalleryConfig,

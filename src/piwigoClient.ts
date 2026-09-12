@@ -4,7 +4,7 @@ import { z } from 'zod';
 import {
   OidcClientCredentialsTokenProvider,
   type ClientCredentialsTokenProvider
-} from '../../../../packages/plugin-sdk/src/client-credentials';
+} from '@wabs/plugin-sdk/client-credentials';
 import type { GalleryAlbumSource } from './albumMetadata';
 import type { GalleryConnection } from './config';
 import type { TopomareGalleryPrincipal } from './topomarePrincipal';

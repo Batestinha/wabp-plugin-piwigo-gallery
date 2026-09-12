@@ -1,6 +1,6 @@
-import type { FlowDefinition } from '../../../../packages/plugin-sdk/src/flow-types';
+import type { FlowDefinition } from '@wabs/plugin-sdk/flow-types';
 import type { FlowSessionSnapshot } from './runtime';
-import type { TranslateFn } from '../../../../packages/plugin-sdk/src/i18n';
+import type { TranslateFn } from '@wabs/plugin-sdk/i18n';
 import type { PiwigoPerson } from './piwigoClient';
 import type { EventAlbumSource } from './contracts/community-events.v1';
 import { manualGalleryAlbumSource, type GalleryAlbumSource } from './albumMetadata';

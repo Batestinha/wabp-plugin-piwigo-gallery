@@ -1,9 +1,9 @@
-import type { CommandMetadata, CommandTargetSpec } from '../../../../packages/plugin-sdk/src/command-metadata';
-import type { CommandContext } from '../../../../packages/plugin-sdk/src/commands';
-import type { TranslateFn } from '../../../../packages/plugin-sdk/src/i18n';
+import type { CommandMetadata, CommandTargetSpec } from '@wabs/plugin-sdk/command-metadata';
+import type { CommandContext } from '@wabs/plugin-sdk/commands';
+import type { TranslateFn } from '@wabs/plugin-sdk/i18n';
 import type { PluginCancellationRegistration, PluginCancellationRequest, PluginCommandContext } from './runtime';
-import type { PrivateDeliveryFallback } from '../../../../packages/plugin-sdk/src/transport';
-import type { MessageActor } from '../../../../packages/plugin-sdk/src/message-actor';
+import type { PrivateDeliveryFallback } from '@wabs/plugin-sdk/transport';
+import type { MessageActor } from '@wabs/plugin-sdk/message-actor';
 import {
   EVENT_ALBUM_SOURCE_LIST_METHOD,
   EVENT_ALBUM_SOURCE_RESOLVE_METHOD,

@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { enqueuePluginJob } from '../../../../packages/plugin-sdk/src/jobs';
-import type { PluginExternalActionRegistration } from '../../../../packages/plugin-sdk/src/external-actions';
-import type { PluginDatabase } from '../../../../packages/plugin-sdk/src/database';
+import { enqueuePluginJob } from '@wabs/plugin-sdk/jobs';
+import type { PluginExternalActionRegistration } from '@wabs/plugin-sdk/external-actions';
+import type { PluginDatabase } from '@wabs/plugin-sdk/database';
 import type { PluginExternalActionRegistrationContext } from './runtime';
 import { parsePiwigoGalleryConfig } from './config';
 import {

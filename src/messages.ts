@@ -1,4 +1,4 @@
-import type { MessageCatalog } from '../../../../packages/plugin-sdk/src/i18n';
+import type { MessageCatalog } from '@wabs/plugin-sdk/i18n';
 
 export const piwigoGalleryMessages: MessageCatalog = {
   'official.piwigo-gallery.description': 'Upload original-quality WhatsApp documents to the centrally authorized gallery.',

@@ -1,4 +1,4 @@
-import type { PluginIdentityAccess, PluginIdentityScopeMembership } from '../../../../packages/plugin-sdk/src/identity-access';
+import type { PluginIdentityAccess, PluginIdentityScopeMembership } from '@wabs/plugin-sdk/identity-access';
 import { configConnection, parsePiwigoGalleryConfig, type GalleryConnection, type GalleryConnectionDefaults, type PiwigoGalleryConfig } from './config';
 
 export async function assertPiwigoGalleryEligibleIdentity(identityId: string, identityAccess: PluginIdentityAccess): Promise<void> {

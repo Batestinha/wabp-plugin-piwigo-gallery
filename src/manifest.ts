@@ -1,4 +1,4 @@
-import type { PluginManifest } from '../../../../packages/plugin-sdk/src/manifest';
+import type { PluginManifest } from '@wabs/plugin-sdk/manifest';
 import { piwigoGalleryConfigSchema } from './config';
 import { piwigoGalleryMessages } from './messages';
 import { piwigoGalleryUploadOnlyBoundary } from './uploadOnlyBoundary';

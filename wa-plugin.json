@@ -1,0 +1,443 @@
+{
+  "schemaVersion": 1,
+  "pluginId": "official.piwigo-gallery",
+  "name": "Piwigo Gallery",
+  "description": "WhatsApp document upload workflow for managed Piwigo galleries, with optional community-event album sources.",
+  "kind": "managed_group",
+  "version": "0.17.2",
+  "coreApiRange": "^0.3.0",
+  "entrypoint": "dist/index.js",
+  "messageNamespace": "official.piwigo-gallery",
+  "descriptionKey": "official.piwigo-gallery.description",
+  "commands": [
+    "/gallery status",
+    "/gallery configure",
+    "/gallery upload"
+  ],
+  "help": {
+    "featureId": "gallery",
+    "titleKey": "official.piwigo-gallery.help.feature.title",
+    "summaryKey": "official.piwigo-gallery.help.feature.summary",
+    "order": 40,
+    "aliases": [
+      "piwigo",
+      "photos",
+      "albums"
+    ],
+    "topics": [
+      {
+        "topicId": "manage-gallery",
+        "titleKey": "official.piwigo-gallery.help.manage.title",
+        "summaryKey": "official.piwigo-gallery.help.manage.summary",
+        "order": 10,
+        "commands": [
+          "/gallery status",
+          "/gallery configure"
+        ],
+        "instructionKeys": [
+          "official.piwigo-gallery.help.manage.instruction"
+        ],
+        "exampleKeys": [
+          "official.piwigo-gallery.help.status.example",
+          "official.piwigo-gallery.help.configure.example"
+        ],
+        "keywords": [
+          "status",
+          "configure",
+          "settings"
+        ],
+        "availability": {
+          "invocation": "group_only",
+          "permission": "piwigo-gallery.configure"
+        }
+      },
+      {
+        "topicId": "upload-gallery",
+        "titleKey": "official.piwigo-gallery.help.upload.title",
+        "summaryKey": "official.piwigo-gallery.help.upload.summary",
+        "order": 20,
+        "commands": [
+          "/gallery upload"
+        ],
+        "instructionKeys": [
+          "official.piwigo-gallery.help.upload.instruction"
+        ],
+        "exampleKeys": [
+          "official.piwigo-gallery.help.upload.example"
+        ],
+        "keywords": [
+          "upload",
+          "send",
+          "documents",
+          "photos"
+        ],
+        "availability": {
+          "invocation": "either",
+          "permission": "piwigo-gallery.upload",
+          "requiresCurrentManagedGroupMembership": true,
+          "currentManagedGroupMembershipMode": "effective_scope",
+          "allowCurrentManagedGroupMemberConfigPath": "access.allowScopeMemberUploads"
+        }
+      }
+    ]
+  },
+  "eventSubscriptions": [
+    "message",
+    "private.message",
+    "plugin.job"
+  ],
+  "requiredPermissions": [
+    "piwigo-gallery.configure",
+    "piwigo-gallery.upload"
+  ],
+  "requiredBotCapabilities": [],
+  "dangerousActions": [],
+  "backgroundJobs": [
+    "piwigo-gallery.finalize",
+    "piwigo-gallery.announce-new-album",
+    "piwigo-gallery.media-dump-hint"
+  ],
+  "externalActions": [
+    {
+      "actionId": "piwigo.albumUploadObserved",
+      "access": "mutation",
+      "scope": "scope",
+      "description": "Observe a scoped Piwigo album upload and schedule its WhatsApp announcement.",
+      "timeoutMs": 30000
+    }
+  ],
+  "databases": [
+    {
+      "name": "gallery",
+      "engine": "sqlite",
+      "scope": "account",
+      "migrations": "migrations/gallery",
+      "operatorMigrations": [
+        "011_topomare_subject_cutover.sql"
+      ]
+    }
+  ],
+  "dataVersion": "11",
+  "cancellation": {
+    "workflows": [
+      {
+        "id": "gallery-upload-setup",
+        "description": "Guided gallery upload setup before document collection starts.",
+        "mode": "core-flow",
+        "scope": "actor-chat",
+        "commands": [
+          "/gallery upload"
+        ],
+        "cancellableStates": [
+          "active"
+        ],
+        "terminalStates": [
+          "completed",
+          "cancelled",
+          "expired"
+        ],
+        "effects": [
+          "discard-gallery-upload-draft"
+        ]
+      },
+      {
+        "id": "gallery-upload-batch",
+        "description": "Active gallery document collection or upload batch.",
+        "mode": "plugin-handler",
+        "scope": "actor-chat",
+        "commands": [
+          "/gallery upload"
+        ],
+        "cancellableStates": [
+          "collecting"
+        ],
+        "terminalStates": [
+          "completed",
+          "cancelled",
+          "expired",
+          "failed"
+        ],
+        "effects": [
+          "delete-staged-media",
+          "clear-active-batch"
+        ],
+        "auditAction": "piwigo-gallery.upload.cancel"
+      }
+    ]
+  },
+  "dependencies": [
+    {
+      "pluginId": "official.community-events",
+      "versionRange": ">=0.5.0",
+      "optional": true
+    }
+  ],
+  "assistant": {
+    "summary": "Piwigo gallery upload workflow for collecting WhatsApp documents and finalizing gallery batches.",
+    "useCases": [
+      "Explain whether gallery uploads are configured for the current scope.",
+      "Start and manage a guided gallery upload flow."
+    ],
+    "prerequisites": [
+      "enabled=true in the target scope.",
+      "The deployment must provide the public HTTPS Piwigo URL and the file-backed Topomare OIDC service identity before uploads can start.",
+      "Upload users need the scoped piwigo-gallery.upload permission."
+    ],
+    "workflows": [
+      {
+        "intent": "gallery_status",
+        "description": "Inspect gallery configuration and connection state.",
+        "commands": [
+          "/gallery status"
+        ]
+      },
+      {
+        "intent": "gallery_configure",
+        "description": "Configure upload enablement and upload limits for the scope.",
+        "commands": [
+          "/gallery configure"
+        ]
+      },
+      {
+        "intent": "gallery_upload",
+        "description": "Start, finalize, or cancel a guided gallery upload batch.",
+        "commands": [
+          "/gallery upload"
+        ]
+      }
+    ]
+  },
+  "operatorConsole": {
+    "configPaths": [
+      "enabled",
+      "access.allowScopeMemberUploads",
+      "autoFinalizeMinutes",
+      "maxFileBytes",
+      "mediaDumpDocumentsHint",
+      "newAlbumAnnouncementsEnabled",
+      "announcementGroupWid",
+      "newAlbumAnnouncementTemplate",
+      "newAlbumAnnouncementDelayMinutes"
+    ],
+    "controls": [
+      {
+        "id": "plugin.official.piwigo-gallery.enabled",
+        "path": "enabled",
+        "label": "Enabled",
+        "description": "Enable Piwigo gallery uploads in this scope.",
+        "section": "Piwigo Gallery",
+        "order": 10,
+        "schema": {
+          "type": "boolean"
+        },
+        "ui": {
+          "widget": "toggle",
+          "helpText": "Enable Piwigo gallery uploads in this scope."
+        }
+      },
+      {
+        "id": "plugin.official.piwigo-gallery.access.allowScopeMemberUploads",
+        "path": "access.allowScopeMemberUploads",
+        "label": "Gallery upload access",
+        "description": "Manage who may upload to the Piwigo gallery in this scope.",
+        "section": "Piwigo Gallery",
+        "order": 30,
+        "schema": {
+          "type": "boolean"
+        },
+        "ui": {
+          "widget": "builder",
+          "builderId": "official.piwigo-gallery.access.v1",
+          "helpText": "Manage who may upload to the Piwigo gallery in this scope."
+        }
+      },
+      {
+        "id": "plugin.official.piwigo-gallery.autoFinalizeMinutes",
+        "path": "autoFinalizeMinutes",
+        "label": "Auto-finalize minutes",
+        "description": "Minutes after the last accepted document before a gallery upload is finalized automatically.",
+        "section": "Piwigo Gallery",
+        "order": 40,
+        "schema": {
+          "type": "number",
+          "min": 1,
+          "max": 1440
+        },
+        "ui": {
+          "widget": "number",
+          "helpText": "Minutes after the last accepted document before a gallery upload is finalized automatically."
+        }
+      },
+      {
+        "id": "plugin.official.piwigo-gallery.maxFileBytes",
+        "path": "maxFileBytes",
+        "label": "Max file size",
+        "description": "Optional WhatsApp document size cap for gallery uploads. Set 0 for no plugin-specific limit.",
+        "section": "Piwigo Gallery",
+        "order": 50,
+        "schema": {
+          "type": "number",
+          "unit": "bytes",
+          "min": 0,
+          "max": 26843545600
+        },
+        "ui": {
+          "widget": "number",
+          "helpText": "Set 0 to rely on WhatsApp, available storage, and the gallery server without an additional plugin cap."
+        }
+      },
+      {
+        "id": "plugin.official.piwigo-gallery.mediaDumpDocumentsHint",
+        "path": "mediaDumpDocumentsHint",
+        "label": "Media dump hint",
+        "description": "Optional quote-reply text sent when WhatsApp photos/videos arrive as a media dump.",
+        "section": "Piwigo Gallery",
+        "order": 60,
+        "schema": {
+          "type": "string",
+          "max": 500
+        },
+        "ui": {
+          "widget": "text",
+          "helpText": "Custom WhatsApp reply for media-dump albums. Leave empty to use the default localized message: If you send those files as documents instead of as media (preserves quality), I can upload them directly to the gallery for you.",
+          "placeholder": "If you send those files as documents instead of as media (preserves quality), I can upload them directly to the gallery for you.",
+          "multiline": true,
+          "templateDialect": "conditional-presence-v1",
+          "templateActivation": "when-used",
+          "templateVariables": [
+            {
+              "token": "actorDisplayName",
+              "label": "Sender display name",
+              "sampleValue": "Diogo"
+            }
+          ],
+          "templateConditionVariables": [
+            {
+              "token": "actorDisplayName",
+              "label": "Sender display name",
+              "sampleValue": "Diogo"
+            },
+            {
+              "token": "isGroup",
+              "label": "Group chat",
+              "sampleValue": "true"
+            },
+            {
+              "token": "isPrivate",
+              "label": "Private chat",
+              "sampleValue": "true"
+            }
+          ],
+          "templateEmptyResult": "suppress"
+        }
+      },
+      {
+        "id": "plugin.official.piwigo-gallery.newAlbumAnnouncementsEnabled",
+        "path": "newAlbumAnnouncementsEnabled",
+        "label": "New album announcements",
+        "description": "Announce newly populated Piwigo albums to a WhatsApp group.",
+        "section": "Piwigo Gallery",
+        "order": 70,
+        "schema": {
+          "type": "boolean"
+        },
+        "ui": {
+          "widget": "toggle",
+          "helpText": "Announce newly populated Piwigo albums to a WhatsApp group."
+        }
+      },
+      {
+        "id": "plugin.official.piwigo-gallery.announcementGroupWid",
+        "path": "announcementGroupWid",
+        "label": "Announcement group",
+        "description": "WhatsApp group JID inside this scope where new album announcements are sent.",
+        "section": "Piwigo Gallery",
+        "order": 80,
+        "schema": {
+          "type": "string"
+        },
+        "ui": {
+          "widget": "entity-picker",
+          "label": "Group",
+          "helpText": "WhatsApp group inside this scope that receives new-album announcements. Community scopes default to their WhatsApp announcement group when one is known.",
+          "placeholder": "Select announcement group"
+        }
+      },
+      {
+        "id": "plugin.official.piwigo-gallery.newAlbumAnnouncementTemplate",
+        "path": "newAlbumAnnouncementTemplate",
+        "label": "Announcement text",
+        "description": "Optional WhatsApp caption template for a new album announcement.",
+        "section": "Piwigo Gallery",
+        "order": 90,
+        "schema": {
+          "type": "string",
+          "max": 500
+        },
+        "ui": {
+          "widget": "text",
+          "label": "Announcement template",
+          "helpText": "Use {album}, {site}, and {user}. Leave empty to use the localized message for the scope.",
+          "placeholder": "New album {album} added to {site} by {user}.",
+          "multiline": true,
+          "templateDialect": "conditional-presence-v1",
+          "templateActivation": "when-condition-used",
+          "templateVariables": [
+            {
+              "token": "album",
+              "label": "Album name",
+              "sampleValue": "Summer Walk"
+            },
+            {
+              "token": "site",
+              "label": "Gallery site",
+              "sampleValue": "Community Gallery"
+            },
+            {
+              "token": "user",
+              "label": "Uploader",
+              "sampleValue": "Diogo"
+            }
+          ],
+          "templateConditionVariables": [
+            {
+              "token": "album",
+              "label": "Album name",
+              "sampleValue": "Summer Walk"
+            },
+            {
+              "token": "site",
+              "label": "Gallery site",
+              "sampleValue": "Community Gallery"
+            },
+            {
+              "token": "user",
+              "label": "Uploader",
+              "sampleValue": "Diogo"
+            }
+          ],
+          "templateEmptyResult": "suppress"
+        }
+      },
+      {
+        "id": "plugin.official.piwigo-gallery.newAlbumAnnouncementDelayMinutes",
+        "path": "newAlbumAnnouncementDelayMinutes",
+        "label": "Announcement delay minutes",
+        "description": "Minutes after Piwigo reports a new album upload before the WhatsApp album announcement is sent.",
+        "section": "Piwigo Gallery",
+        "order": 100,
+        "schema": {
+          "type": "number",
+          "min": 1,
+          "max": 1440,
+          "unit": "minutes"
+        },
+        "ui": {
+          "widget": "number",
+          "helpText": "Minutes after Piwigo reports a new album upload before the WhatsApp album announcement is sent."
+        }
+      }
+    ],
+    "internalConfigPaths": []
+  }
+}

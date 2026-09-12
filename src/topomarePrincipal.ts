@@ -1,10 +1,10 @@
 import { z } from 'zod';
-import type { PluginIdentityAccess, VerifiedFederatedSubject as ActiveFederatedSubjectLink } from '../../../../packages/plugin-sdk/src/identity-access';
+import type { PluginIdentityAccess, VerifiedFederatedSubject as ActiveFederatedSubjectLink } from '@wabs/plugin-sdk/identity-access';
 import {
   stableWaIdentityIdSchema,
   topomareUserIdSchema
-} from '../../../../packages/plugin-sdk/src/identity-access';
-import { parseCanonicalHttpsIssuer } from '../../../../packages/plugin-sdk/src/client-credentials';
+} from '@wabs/plugin-sdk/identity-access';
+import { parseCanonicalHttpsIssuer } from '@wabs/plugin-sdk/client-credentials';
 
 const providerNamespaceSchema = z.string()
   .min(1)

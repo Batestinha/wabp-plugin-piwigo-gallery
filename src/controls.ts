@@ -117,6 +117,7 @@ export const piwigoGalleryControls: ControlDescriptor[] = [
       widget: 'entity-picker',
       label: 'Group',
       placeholder: 'Select announcement group',
+      defaultSource: 'community-announcement-group',
       helpText: 'WhatsApp group inside this scope that receives new-album announcements. Community scopes default to their WhatsApp announcement group when one is known.'
     }
   }),

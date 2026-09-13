@@ -32,8 +32,8 @@ export const piwigoGalleryDatabases = [{
 export const piwigoGalleryManifest: PluginManifest = {
   pluginId: PIWIGO_GALLERY_PLUGIN_ID,
   kind: 'managed_group',
-  version: '0.17.2',
-  coreApiRange: '^0.3.0',
+  version: '0.17.3',
+  coreApiRange: '^0.3.3',
   messageNamespace: 'official.piwigo-gallery',
   descriptionKey: 'official.piwigo-gallery.description',
   defaultMessages: piwigoGalleryMessages,

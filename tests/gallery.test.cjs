@@ -154,10 +154,28 @@ test('the upload-only boundary, migration bytes, translations and custom templat
   const config = plugin.manifest.configSchema.parse({ newAlbumAnnouncementTemplate: 'Saved: {album}', autoFinalizeMinutes: 17 });
   assert.equal(config.newAlbumAnnouncementTemplate, 'Saved: {album}');
   assert.equal(config.autoFinalizeMinutes, 17);
-  assert.equal(metadata.dataVersion, '11');
-  assert.equal(migrations.length, 11);
+  assert.equal(metadata.dataVersion, '12');
+  assert.equal(migrations.length, 12);
   for (const name of migrations) assert.equal(fs.readFileSync(path.join('migrations/gallery', name), 'utf8'), fs.readFileSync(path.join('src/migrations/gallery', name), 'utf8'));
   const pt = require('../locales/pt-PT/official.piwigo-gallery.json');
   for (const key of Object.keys(plugin.manifest.defaultMessages)) assert.ok(pt[key]?.trim(), key);
   assert.equal(plugin.lifecycle, undefined);
+});
+
+test('announcement captions freeze native mention metadata under the delivery lease', () => {
+  const { saveAlbumAnnouncement, claimAlbumAnnouncement, freezeAlbumAnnouncementCaption, getAlbumAnnouncement } = require('../dist/store');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'wabs-gallery-caption-'));
+  const db = open(path.join(directory, 'gallery.sqlite'));
+  try {
+    migrate(db);
+    saveAlbumAnnouncement(db, { id: 'caption', dedupeKey: 'caption', scopeId: 'fixture-scope', announcementGroupWid: '123@g.us',
+      albumName: 'Walks', siteLabel: 'Gallery', userDisplayName: 'Uploader', files: [], observedAt: timestamp, announceAt: timestamp, status: 'pending' });
+    claimAlbumAnnouncement(db, { scopeId: 'fixture-scope', announcementId: 'caption', claimId: 'lease', claimedAt: timestamp, claimExpiresAt: '2026-09-12T10:10:00.000Z' });
+    const original = { text: '@all @456 @789@g.us', mentionAll: true, mentionedWids: ['456@c.us'], groupMentions: [{ groupJid: '789@g.us', groupSubject: 'Walks' }] };
+    const input = { scopeId: 'fixture-scope', announcementId: 'caption', claimId: 'lease', payload: original };
+    assert.deepEqual(freezeAlbumAnnouncementCaption(db, input), original);
+    assert.deepEqual(freezeAlbumAnnouncementCaption(db, { ...input, payload: { text: 'Changed config' } }), original);
+    assert.deepEqual(getAlbumAnnouncement(db, 'fixture-scope', 'caption').captionPayload, original);
+    assert.throws(() => freezeAlbumAnnouncementCaption(db, { ...input, claimId: 'stale-lease' }), /lease lost/i);
+  } finally { db.close(); cleanup(directory); }
 });

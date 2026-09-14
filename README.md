@@ -11,3 +11,18 @@ The versioned upload-only boundary remains enforced. This plugin does not own us
 Run `npm ci --ignore-scripts`, `npm test` and `npm run release:archive`. CI tests Node 22.23.2 and 24.15.0, rebuilds identical archives and loads them outside the repository. Tests use fixture databases and mocked effects. Installation and scope enablement are separate; signed WABS entries identify immutable release bytes.
 
 The community announcement-group default is declared through generic control metadata. The console resolves that default from the selected scope while retaining explicitly configured values.
+
+## Typed templates and WhatsApp mentions
+
+Message editors support exact choice and text comparisons, numeric thresholds,
+boolean values, availability checks, nested All/Any rules and Otherwise branches.
+Existing bare conditions retain their original presence meaning. Comparisons use
+canonical values separately from translated display text; missing values do not
+satisfy negative comparisons, while zero and false remain available.
+
+Type `@` in a supported message body or caption to insert a person, a group link,
+or a contextual recipient. Group links and native all-members mentions are distinct;
+the editor only offers targets supported by that destination. Mentions in hidden
+branches do not resolve or notify anyone. Native poll titles/options, group names
+and calendar text remain plain text. Durable delivery stores rendered text and
+recipient metadata together so retries keep the original notification intent.

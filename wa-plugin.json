@@ -4,8 +4,8 @@
   "name": "Piwigo Gallery",
   "description": "WhatsApp document upload workflow for managed Piwigo galleries, with optional community-event album sources.",
   "kind": "managed_group",
-  "version": "0.17.3",
-  "coreApiRange": "^0.3.3",
+  "version": "0.18.0",
+  "coreApiRange": "^0.3.6",
   "entrypoint": "dist/index.js",
   "messageNamespace": "official.piwigo-gallery",
   "descriptionKey": "official.piwigo-gallery.description",
@@ -117,7 +117,7 @@
       ]
     }
   ],
-  "dataVersion": "11",
+  "dataVersion": "12",
   "cancellation": {
     "workflows": [
       {
@@ -344,37 +344,60 @@
         "order": 60,
         "schema": {
           "type": "string",
-          "max": 500
+          "max": 4000
         },
         "ui": {
           "helpText": "Custom WhatsApp reply for media-dump albums. Leave empty to use the default localized message: If you send those files as documents instead of as media (preserves quality), I can upload them directly to the gallery for you.",
           "widget": "text",
           "placeholder": "If you send those files as documents instead of as media (preserves quality), I can upload them directly to the gallery for you.",
           "multiline": true,
-          "templateDialect": "conditional-presence-v1",
+          "templateDialect": "conditional-values-v2",
           "templateActivation": "when-used",
+          "templateMentions": {
+            "people": true,
+            "groups": true,
+            "all": true,
+            "targets": [
+              {
+                "id": "uploader",
+                "label": "Uploader"
+              },
+              {
+                "id": "currentGroup",
+                "label": "Current group"
+              }
+            ]
+          },
           "templateVariables": [
             {
               "token": "actorDisplayName",
               "label": "Sender display name",
-              "sampleValue": "Diogo"
+              "sampleValue": "Diogo",
+              "valueType": "text",
+              "optional": true
             }
           ],
           "templateConditionVariables": [
             {
               "token": "actorDisplayName",
               "label": "Sender display name",
-              "sampleValue": "Diogo"
+              "sampleValue": "Diogo",
+              "valueType": "text",
+              "optional": true
             },
             {
               "token": "isGroup",
               "label": "Group chat",
-              "sampleValue": "true"
+              "sampleValue": "true",
+              "valueType": "boolean",
+              "conditionSampleValue": true
             },
             {
               "token": "isPrivate",
               "label": "Private chat",
-              "sampleValue": "true"
+              "sampleValue": "true",
+              "valueType": "boolean",
+              "conditionSampleValue": true
             }
           ],
           "templateEmptyResult": "suppress"
@@ -488,7 +511,7 @@
         "order": 90,
         "schema": {
           "type": "string",
-          "max": 500
+          "max": 4000
         },
         "ui": {
           "helpText": "Use {album}, {site}, and {user}. Leave empty to use the localized message for the scope.",
@@ -496,40 +519,63 @@
           "label": "Announcement template",
           "placeholder": "New album {album} added to {site} by {user}.",
           "multiline": true,
-          "templateDialect": "conditional-presence-v1",
+          "templateDialect": "conditional-values-v2",
           "templateActivation": "when-condition-used",
+          "templateMentions": {
+            "people": true,
+            "groups": true,
+            "all": true,
+            "targets": [
+              {
+                "id": "currentGroup",
+                "label": "Current group"
+              }
+            ]
+          },
           "templateVariables": [
             {
               "token": "album",
               "label": "Album name",
-              "sampleValue": "Summer Walk"
+              "sampleValue": "Summer Walk",
+              "valueType": "text",
+              "optional": true
             },
             {
               "token": "site",
               "label": "Gallery site",
-              "sampleValue": "Community Gallery"
+              "sampleValue": "Community Gallery",
+              "valueType": "text",
+              "optional": true
             },
             {
               "token": "user",
               "label": "Uploader",
-              "sampleValue": "Diogo"
+              "sampleValue": "Diogo",
+              "valueType": "text",
+              "optional": true
             }
           ],
           "templateConditionVariables": [
             {
               "token": "album",
               "label": "Album name",
-              "sampleValue": "Summer Walk"
+              "sampleValue": "Summer Walk",
+              "valueType": "text",
+              "optional": true
             },
             {
               "token": "site",
               "label": "Gallery site",
-              "sampleValue": "Community Gallery"
+              "sampleValue": "Community Gallery",
+              "valueType": "text",
+              "optional": true
             },
             {
               "token": "user",
               "label": "Uploader",
-              "sampleValue": "Diogo"
+              "sampleValue": "Diogo",
+              "valueType": "text",
+              "optional": true
             }
           ],
           "templateEmptyResult": "suppress"

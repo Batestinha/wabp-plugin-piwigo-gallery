@@ -32,8 +32,8 @@ export const piwigoGalleryDatabases = [{
 export const piwigoGalleryManifest: PluginManifest = {
   pluginId: PIWIGO_GALLERY_PLUGIN_ID,
   kind: 'managed_group',
-  version: '0.17.3',
-  coreApiRange: '^0.3.3',
+  version: '0.18.0',
+  coreApiRange: '^0.3.6',
   messageNamespace: 'official.piwigo-gallery',
   descriptionKey: 'official.piwigo-gallery.description',
   defaultMessages: piwigoGalleryMessages,
@@ -96,7 +96,7 @@ export const piwigoGalleryManifest: PluginManifest = {
       description: 'Observe a scoped Piwigo album upload and schedule its WhatsApp announcement.'
   }],
   databases: piwigoGalleryDatabases,
-  dataVersion: '11',
+  dataVersion: '12',
   dependencies: [
     { pluginId: 'official.community-events', versionRange: '>=0.5.0', optional: true }
   ],

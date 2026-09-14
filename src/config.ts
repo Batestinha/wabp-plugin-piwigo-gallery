@@ -1,12 +1,8 @@
 import { z } from 'zod';
 import type { AppConfig } from './deploymentConfig';
 import { parseCanonicalHttpsIssuer } from '@wabs/plugin-sdk/client-credentials';
-import {
-  conditionalTemplateHasCondition,
-  renderConditionalTemplateIfActive,
-  validateConditionalTemplate,
-  validateConditionalTemplateIfActive
-} from '@wabs/plugin-sdk/templates';
+import { renderValueTemplate, renderValueTemplateText, validateValueTemplate,
+  type ValueTemplateDefinition } from '@wabs/plugin-sdk/templates';
 
 export const PIWIGO_GALLERY_DEFAULT_BASE_URL_ENV = 'PIWIGO_GALLERY_DEFAULT_BASE_URL';
 export const TOPOMARE_OIDC_ISSUER_ENV = 'TOPOMARE_OIDC_ISSUER';
@@ -20,34 +16,24 @@ export const PIWIGO_GALLERY_UNLIMITED_FILE_BYTES = Number.MAX_SAFE_INTEGER;
 export const PIWIGO_ALBUM_ANNOUNCEMENT_TEMPLATE_TOKENS = ['album', 'site', 'user'] as const;
 export const PIWIGO_MEDIA_DUMP_HINT_TEMPLATE_TOKENS = ['actorDisplayName', 'isGroup', 'isPrivate'] as const;
 
-const piwigoAlbumAnnouncementTemplateSchema = z.string().trim().max(500).superRefine((template, ctx) => {
-  const allowed = new Set<string>(PIWIGO_ALBUM_ANNOUNCEMENT_TEMPLATE_TOKENS);
-  if (!conditionalTemplateHasCondition(template)) {
-    for (const match of template.matchAll(/\{([A-Za-z][A-Za-z0-9_-]*)\}/g)) {
-      const token = match[1] ?? '';
-      if (!allowed.has(token)) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, message: `unknown announcement template variable {${token}}` });
-      }
-    }
-  }
-  for (const issue of conditionalTemplateHasCondition(template)
-    ? validateConditionalTemplate(template, PIWIGO_ALBUM_ANNOUNCEMENT_TEMPLATE_TOKENS)
-    : []) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: issue.message
-    });
-  }
+export const albumTemplateDefinition: ValueTemplateDefinition = {
+  variables: PIWIGO_ALBUM_ANNOUNCEMENT_TEMPLATE_TOKENS.map(token => ({ token, label: token, valueType: 'text', optional: true })),
+  activation: 'when-condition-used',
+  mentions: { people: true, groups: true, all: true, targets: [{ id: 'currentGroup', label: 'Current group' }] }
+};
+export const mediaDumpTemplateDefinition: ValueTemplateDefinition = {
+  variables: [{ token: 'actorDisplayName', label: 'Sender display name', valueType: 'text', optional: true }],
+  conditionVariables: [
+    { token: 'actorDisplayName', label: 'Sender display name', valueType: 'text', optional: true },
+    ...['isGroup', 'isPrivate'].map(token => ({ token, label: token, valueType: 'boolean' as const }))
+  ], activation: 'when-used', mentions: { people: true, groups: true, all: true,
+    targets: [{ id: 'uploader', label: 'Uploader' }, { id: 'currentGroup', label: 'Current group' }] }
+};
+const templateSchema = (definition: ValueTemplateDefinition) => z.string().trim().max(4000).superRefine((template, ctx) => {
+  for (const issue of validateValueTemplate(template, definition)) ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue.message });
 });
-
-const piwigoMediaDumpHintSchema = z.string().trim().max(500).superRefine((template, ctx) => {
-  for (const issue of validateConditionalTemplateIfActive(template, PIWIGO_MEDIA_DUMP_HINT_TEMPLATE_TOKENS)) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: issue.message
-    });
-  }
-});
+const piwigoAlbumAnnouncementTemplateSchema = templateSchema(albumTemplateDefinition);
+const piwigoMediaDumpHintSchema = templateSchema(mediaDumpTemplateDefinition);
 
 export const piwigoGalleryConfigSchema = z.object({
   enabled: z.boolean().default(false),
@@ -87,21 +73,21 @@ export function parsePiwigoGalleryConfig(input: unknown): PiwigoGalleryConfig {
   return piwigoGalleryConfigSchema.parse(input);
 }
 
-export function renderPiwigoAlbumAnnouncementTemplate(
-  template: string,
-  values: Record<(typeof PIWIGO_ALBUM_ANNOUNCEMENT_TEMPLATE_TOKENS)[number], string>
-): string {
-  if (conditionalTemplateHasCondition(template)) {
-    return renderConditionalTemplateIfActive(template, PIWIGO_ALBUM_ANNOUNCEMENT_TEMPLATE_TOKENS, values);
-  }
-  return template.replace(/\{(album|site|user)\}/g, (_, token: keyof typeof values) => values[token]);
+export function renderPiwigoAlbumAnnouncementFragment(template: string, values: Record<'album' | 'site' | 'user', string>) {
+  return renderValueTemplate(template, albumTemplateDefinition, { displayValues: values, conditionValues: values });
 }
-
-export function renderPiwigoMediaDumpDocumentsHint(
-  template: string,
-  values: Readonly<Record<(typeof PIWIGO_MEDIA_DUMP_HINT_TEMPLATE_TOKENS)[number], string | undefined>>
-): string {
-  return renderConditionalTemplateIfActive(template, PIWIGO_MEDIA_DUMP_HINT_TEMPLATE_TOKENS, values);
+export function renderPiwigoAlbumAnnouncementTemplate(template: string, values: Record<'album' | 'site' | 'user', string>): string {
+  return renderValueTemplateText(template, albumTemplateDefinition, { displayValues: values, conditionValues: values });
+}
+function mediaDumpContext(values: Readonly<Record<(typeof PIWIGO_MEDIA_DUMP_HINT_TEMPLATE_TOKENS)[number], string | undefined>>) {
+  return { displayValues: values, conditionValues: { actorDisplayName: values.actorDisplayName,
+    isGroup: values.isGroup === 'true', isPrivate: values.isPrivate === 'true' } };
+}
+export function renderPiwigoMediaDumpDocumentsHintFragment(template: string, values: Readonly<Record<(typeof PIWIGO_MEDIA_DUMP_HINT_TEMPLATE_TOKENS)[number], string | undefined>>) {
+  return renderValueTemplate(template, mediaDumpTemplateDefinition, mediaDumpContext(values));
+}
+export function renderPiwigoMediaDumpDocumentsHint(template: string, values: Readonly<Record<(typeof PIWIGO_MEDIA_DUMP_HINT_TEMPLATE_TOKENS)[number], string | undefined>>): string {
+  return renderValueTemplateText(template, mediaDumpTemplateDefinition, mediaDumpContext(values));
 }
 
 /**

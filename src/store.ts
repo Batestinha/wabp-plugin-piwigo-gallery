@@ -1,3 +1,4 @@
+import type { ResolvedTemplateMessage } from '@wabs/plugin-sdk/templates';
 import { z } from 'zod';
 import type {
   PluginDatabase,
@@ -163,6 +164,7 @@ export interface PiwigoAlbumAnnouncement {
   albumName: string;
   siteLabel: string;
   userDisplayName: string;
+  captionPayload?: ResolvedTemplateMessage | undefined;
   files: PiwigoAlbumAnnouncementFile[];
   observedAt: string;
   announceAt: string;
@@ -276,6 +278,7 @@ interface AnnouncementRow extends PluginDatabaseRow {
   album_name: string;
   site_label: string;
   user_display_name: string;
+  caption_payload_json: string | null;
   observed_at: string;
   announce_at: string;
   status: PiwigoAlbumAnnouncement['status'];
@@ -2023,6 +2026,7 @@ function announcementFromRow(db: PluginDatabase, row: AnnouncementRow): StoredPi
     albumName: row.album_name,
     siteLabel: row.site_label,
     userDisplayName: row.user_display_name,
+    ...(row.caption_payload_json ? { captionPayload: JSON.parse(row.caption_payload_json) as ResolvedTemplateMessage } : {}),
     files,
     observedAt: row.observed_at,
     announceAt: row.announce_at,
@@ -2243,4 +2247,20 @@ function uniqueNumbers(values: number[]): number[] {
 
 function parseJsonArray<T>(json: string, item: z.ZodType<T>): T[] {
   return z.array(item).parse(JSON.parse(json));
+}
+
+/** The active lease freezes text and recipients together before the first media send. */
+export function freezeAlbumAnnouncementCaption(db: PluginDatabase, input: {
+  scopeId: string; announcementId: string; claimId: string; payload: ResolvedTemplateMessage;
+}): ResolvedTemplateMessage {
+  return db.transaction(() => {
+    const announcement = requireAnnouncement(db, input.scopeId, input.announcementId);
+    if (announcement.status !== 'pending' || announcement.claimId !== input.claimId) throw new GalleryStorageConflictError('Announcement lease lost while freezing caption.');
+    if (announcement.captionPayload) return announcement.captionPayload;
+    const result = db.run(`UPDATE gallery_album_announcements SET caption_payload_json = ?, version = version + 1
+      WHERE id = ? AND scope_id = ? AND claim_id = ? AND caption_payload_json IS NULL`,
+      JSON.stringify(input.payload), input.announcementId, input.scopeId, input.claimId);
+    if (result.changes !== 1) throw new GalleryStorageConflictError('Announcement caption changed concurrently.');
+    return input.payload;
+  });
 }

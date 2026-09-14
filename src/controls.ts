@@ -1,3 +1,4 @@
+import { albumTemplateDefinition, mediaDumpTemplateDefinition } from './config';
 import { defineControl } from '@wabs/plugin-sdk/controls';
 import type { ControlDescriptor, ControlSchemaMetadata, ControlUiHint } from '@wabs/plugin-sdk/controls-types';
 import { PIWIGO_GALLERY_PLUGIN_ID } from './manifest';
@@ -80,21 +81,22 @@ export const piwigoGalleryControls: ControlDescriptor[] = [
     label: 'Media dump hint',
     description: 'Optional quote-reply text sent when WhatsApp photos/videos arrive as a media dump.',
     order: 60,
-    schema: { type: 'string', max: 500 },
+    schema: { type: 'string', max: 4000 },
     ui: {
       widget: 'text',
       placeholder: piwigoGalleryMessages['official.piwigo-gallery.mediaDumpDocumentsHint'],
       helpText: `Custom WhatsApp reply for media-dump albums. Leave empty to use the default localized message: ${piwigoGalleryMessages['official.piwigo-gallery.mediaDumpDocumentsHint']}`,
       multiline: true,
-      templateDialect: 'conditional-presence-v1',
+      templateDialect: 'conditional-values-v2',
       templateActivation: 'when-used',
+      templateMentions: mediaDumpTemplateDefinition.mentions,
       templateVariables: [
-        { token: 'actorDisplayName', label: 'Sender display name', sampleValue: 'Diogo' }
+        { token: 'actorDisplayName', label: 'Sender display name', sampleValue: 'Diogo', valueType: 'text', optional: true }
       ],
       templateConditionVariables: [
-        { token: 'actorDisplayName', label: 'Sender display name', sampleValue: 'Diogo' },
-        { token: 'isGroup', label: 'Group chat', sampleValue: 'true' },
-        { token: 'isPrivate', label: 'Private chat', sampleValue: 'true' }
+        { token: 'actorDisplayName', label: 'Sender display name', sampleValue: 'Diogo', valueType: 'text', optional: true },
+        { token: 'isGroup', label: 'Group chat', sampleValue: 'true', valueType: 'boolean', conditionSampleValue: true },
+        { token: 'isPrivate', label: 'Private chat', sampleValue: 'true', valueType: 'boolean', conditionSampleValue: true }
       ],
       templateEmptyResult: 'suppress'
     }
@@ -134,24 +136,25 @@ export const piwigoGalleryControls: ControlDescriptor[] = [
     label: 'Announcement text',
     description: 'Optional WhatsApp caption template for a new album announcement.',
     order: 90,
-    schema: { type: 'string', max: 500 },
+    schema: { type: 'string', max: 4000 },
     ui: {
       widget: 'text',
       label: 'Announcement template',
       placeholder: piwigoGalleryMessages['official.piwigo-gallery.albumAnnouncementCaption'],
       helpText: 'Use {album}, {site}, and {user}. Leave empty to use the localized message for the scope.',
       multiline: true,
-      templateDialect: 'conditional-presence-v1',
+      templateDialect: 'conditional-values-v2',
       templateActivation: 'when-condition-used',
+      templateMentions: albumTemplateDefinition.mentions,
       templateVariables: [
-        { token: 'album', label: 'Album name', sampleValue: 'Summer Walk' },
-        { token: 'site', label: 'Gallery site', sampleValue: 'Community Gallery' },
-        { token: 'user', label: 'Uploader', sampleValue: 'Diogo' }
+        { token: 'album', label: 'Album name', sampleValue: 'Summer Walk', valueType: 'text', optional: true },
+        { token: 'site', label: 'Gallery site', sampleValue: 'Community Gallery', valueType: 'text', optional: true },
+        { token: 'user', label: 'Uploader', sampleValue: 'Diogo', valueType: 'text', optional: true }
       ],
       templateConditionVariables: [
-        { token: 'album', label: 'Album name', sampleValue: 'Summer Walk' },
-        { token: 'site', label: 'Gallery site', sampleValue: 'Community Gallery' },
-        { token: 'user', label: 'Uploader', sampleValue: 'Diogo' }
+        { token: 'album', label: 'Album name', sampleValue: 'Summer Walk', valueType: 'text', optional: true },
+        { token: 'site', label: 'Gallery site', sampleValue: 'Community Gallery', valueType: 'text', optional: true },
+        { token: 'user', label: 'Uploader', sampleValue: 'Diogo', valueType: 'text', optional: true }
       ],
       templateEmptyResult: 'suppress'
     }

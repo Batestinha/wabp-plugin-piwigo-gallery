@@ -1,3 +1,5 @@
+import { combineResolvedTemplate, resolvePluginTemplateMentions, type ResolvedTemplateMessage } from '@wabs/plugin-sdk/templates';
+import { freezeAlbumAnnouncementCaption } from './store';
 import type {
   PluginJobEvent,
   PluginMessageEvent,
@@ -10,8 +12,8 @@ import { enqueuePluginJob } from '@wabs/plugin-sdk/jobs';
 import {
   galleryConnectionDefaultsFromAppConfig,
   parsePiwigoGalleryConfig,
-  renderPiwigoAlbumAnnouncementTemplate,
-  renderPiwigoMediaDumpDocumentsHint
+  renderPiwigoAlbumAnnouncementFragment,
+  renderPiwigoMediaDumpDocumentsHintFragment
 } from './config';
 import {
   PIWIGO_GALLERY_ANNOUNCE_NEW_ALBUM_JOB,
@@ -396,13 +398,16 @@ async function sendMediaDumpHint(
     messageId: payload.messageId,
     remindedAt: job.runAt.toISOString()
   }, MEDIA_DUMP_REMINDER_COOLDOWN_SECONDS);
-  let text: string;
+  let message: ResolvedTemplateMessage;
   try {
-    text = renderPiwigoMediaDumpDocumentsHint(source, {
+    const fragment = renderPiwigoMediaDumpDocumentsHintFragment(source, {
       actorDisplayName: payload.actorDisplayName,
       isGroup: payload.chatSurface === 'group' ? 'true' : undefined,
       isPrivate: payload.chatSurface === 'private' ? 'true' : undefined
-    }).trim();
+    });
+    message = combineResolvedTemplate(await resolvePluginTemplateMentions(fragment, { context, chatId: payload.chatId, scopeId: job.scopeId,
+      currentGroupId: job.groupWid, targets: { uploader: [{ identityId: payload.actorIdentityId }] } }));
+    message.text = message.text.trim();
   } catch {
     return [{
       type: 'audit.record',
@@ -410,14 +415,14 @@ async function sendMediaDumpHint(
       metadataJson: { reason: 'template-invalid' }
     }];
   }
-  if (!text) {
+  if (!message.text) {
     return;
   }
   return [{
     type: 'message.sendText',
     chatId: payload.chatId,
     quotedMessageId: payload.messageId,
-    text
+    ...message
   }];
 }
 
@@ -1556,7 +1561,11 @@ async function dispatchNextAnnouncementFile(
       site: announcement.siteLabel,
       user: announcement.userDisplayName
     };
-    const caption = await albumAnnouncementCaption(context, announcement, config.newAlbumAnnouncementTemplate, captionValues);
+    const captionPayload = announcement.captionPayload ?? freezeAlbumAnnouncementCaption(db, {
+      scopeId: announcement.scopeId, announcementId, claimId,
+      payload: await albumAnnouncementCaption(context, announcement, config.newAlbumAnnouncementTemplate, captionValues)
+    });
+    const { text: caption, ...captionMentions } = captionPayload;
     return [
       announcementClaimRecoveryAction(announcement),
       {
@@ -1567,7 +1576,7 @@ async function dispatchNextAnnouncementFile(
           mimeType: file.mimeType,
           buffer: file.buffer
         },
-        ...(selected[0]?.position === next.position && caption ? { caption } : {}),
+        ...(selected[0]?.position === next.position && caption ? { caption, ...captionMentions } : {}),
         waitUntilMsgSent: true,
         abortBatchOnFailure: true,
         idempotencyKey: announcementFileIdempotencyKey(announcement, next.position)
@@ -1827,13 +1836,17 @@ async function albumAnnouncementCaption(
   announcement: PiwigoAlbumAnnouncement,
   configuredTemplate: string,
   values: Record<'album' | 'site' | 'user', string>
-): Promise<string> {
+): Promise<ResolvedTemplateMessage> {
   const source = configuredTemplate
     || (await context.i18n.translatorForScope(announcement.scopeId))(
       'official.piwigo-gallery.albumAnnouncementCaption'
     );
   try {
-    return renderPiwigoAlbumAnnouncementTemplate(source, values).trim();
+    const message = combineResolvedTemplate(await resolvePluginTemplateMentions(renderPiwigoAlbumAnnouncementFragment(source, values), {
+      context, chatId: announcement.announcementGroupWid!, scopeId: announcement.scopeId
+    }));
+    message.text = message.text.trim();
+    return message;
   } catch {
     context.logger.warn({
       pluginId: PIWIGO_GALLERY_PLUGIN_ID,
@@ -1841,7 +1854,7 @@ async function albumAnnouncementCaption(
       announcementId: announcement.id,
       field: 'newAlbumAnnouncementTemplate'
     }, 'Piwigo album announcement caption template is invalid; sending media without a caption');
-    return '';
+    return { text: '' };
   }
 }
 

@@ -15,7 +15,7 @@ for (const file of ['node_modules/@wabs/plugin-sdk/dist/identity-access.js', 'no
 assert.equal(fs.existsSync(path.join(root, 'node_modules/@prisma')), false);
 assert.equal(plugin.manifest.configSchema.parse({ newAlbumAnnouncementTemplate: 'Saved: {album}' }).newAlbumAnnouncementTemplate, 'Saved: {album}');
 assert.equal(metadata.dataVersion, '12');
-assert.equal(fs.readdirSync(path.join(root, 'migrations/gallery')).length, 11);
+assert.equal(fs.readdirSync(path.join(root, 'migrations/gallery')).length, 12);
 assert.deepEqual(metadata.databases[0].operatorMigrations, ['011_topomare_subject_cutover.sql']);
 console.log(JSON.stringify({ pluginId: metadata.pluginId, version: metadata.version, standaloneLoad: true, translations: Object.keys(pt).length, controls: metadata.operatorConsole.controls.length }));
 

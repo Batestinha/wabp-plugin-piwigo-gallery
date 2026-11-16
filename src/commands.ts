@@ -389,7 +389,9 @@ async function routeGalleryUpload(
   let batch: GalleryUploadBatch | undefined;
   try {
     const db = await preparedGalleryDatabase(runtime.databases);
-    batch = getActiveBatchAcrossScopes(db, ctx.message.chatId, actor.identityId);
+    batch = getActiveBatchAcrossScopes(db, actor.deliveryChatId, actor.identityId)
+      ?? (ctx.message.chatId !== actor.deliveryChatId
+        ? getActiveBatchAcrossScopes(db, ctx.message.chatId, actor.identityId) : undefined);
   } catch (error) {
     return galleryUploadStateFailure(context, ctx, error, 'active-batch-lookup');
   }
@@ -1221,15 +1223,17 @@ async function finalizeActiveGalleryUpload(
       batch.scopeId
     );
   }
+  const replyChatId = piwigoCommandActor(ctx)?.deliveryChatId;
+  if (!replyChatId) throw new Error('Authoritative actor identity is unavailable for gallery delivery.');
   return {
     handled: true,
     pluginActions: [
       {
         type: 'message.sendText' as const,
-        chatId: ctx.message.chatId,
+        chatId: replyChatId,
         text: t('official.piwigo-gallery.finalizeQueued'),
         idempotencyKey: `piwigo-gallery:upload-request:${ctx.message.id}`,
-        quotedMessageId: ctx.message.id
+        ...(ctx.message.chatId === replyChatId ? { quotedMessageId: ctx.message.id } : {})
       },
       {
         type: 'plugin.enqueueJob' as const,

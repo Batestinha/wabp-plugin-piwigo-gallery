@@ -41,6 +41,7 @@ export function createGalleryUploadFlowDefinition(input: {
     flowType: PIWIGO_GALLERY_UPLOAD_FLOW_TYPE,
     t: input.t,
     initialStepId: 'onde',
+    interactionPolicy: { kind: 'guided', conversationAudience: 'requester', resultAudience: 'requester' },
     context: 'private',
     timeoutMinutes: 30,
     completionReply: false,

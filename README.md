@@ -26,3 +26,13 @@ the editor only offers targets supported by that destination. Mentions in hidden
 branches do not resolve or notify anyone. Native poll titles/options, group names
 and calendar text remain plain text. Durable delivery stores rendered text and
 recipient metadata together so retries keep the original notification intent.
+
+## Command interaction contract
+
+This release requires WABP core API 0.4 and the matching plugin SDK. Commands
+declare invocation eligibility and the audience and length of their conversation
+through `interactionPolicy`; plugins without commands retain an empty command
+list. The host owns group-to-PM notices, the two-question allowance for brief
+clarification, and routing across assistant execution and recovered flows. Personal
+guided workflows stay private, with domain publications delivered through their
+existing authorized group publication paths.

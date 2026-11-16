@@ -1,4 +1,4 @@
-import type { CommandMetadata, CommandTargetSpec } from '@wabs/plugin-sdk/command-metadata';
+import type { PluginCommandMetadata, CommandMetadata, CommandTargetSpec } from '@wabs/plugin-sdk/command-metadata';
 import type { CommandContext } from '@wabs/plugin-sdk/commands';
 import type { TranslateFn } from '@wabs/plugin-sdk/i18n';
 import type { PluginCancellationRegistration, PluginCancellationRequest, PluginCommandContext } from './runtime';
@@ -545,7 +545,7 @@ async function startUploadFlow(
   }
   const { target, t } = resolution;
   const db = await preparedGalleryDatabase(runtime.databases);
-  const collectionChatId = ctx.message.context === 'private' ? ctx.message.chatId : target.groupWid;
+  const collectionChatId = actor.deliveryChatId;
   let active: GalleryUploadBatch | undefined;
   try {
     active = getActiveBatchAcrossScopes(db, collectionChatId, actor.identityId);
@@ -614,14 +614,6 @@ async function startUploadFlow(
         deleteDraft(db, target.scopeId, session.id);
       }
     });
-    if (ctx.message.context === 'group') {
-      return {
-        handled: true,
-        text: t(flowStart.privateDeliveryFallback
-          ? 'official.piwigo-gallery.uploadStartedInGroupFallback'
-          : 'official.piwigo-gallery.uploadStartedPrivate', { target: target.label })
-      };
-    }
     return { handled: true, response: { kind: 'none' as const } };
   } catch (error) {
     if (createdFlowSessionId) {
@@ -1376,10 +1368,12 @@ function galleryAdminCommand(input: {
   descriptionKey: string;
   topicId: GalleryHelpTopic;
   exampleKey: string;
-}): CommandMetadata {
+}): PluginCommandMetadata {
   return {
+    interactionPolicy: { kind: 'immediate', conversationAudience: 'requester', resultAudience: 'invoking_chat' },
     plane: 'group_operation',
     interaction: 'group_same_chat',
+    invocation: 'group_only',
     pluginId: PIWIGO_GALLERY_PLUGIN_ID,
     permission: PIWIGO_GALLERY_PERMISSIONS.configure,
     requiresManagedGroup: true,
@@ -1405,10 +1399,12 @@ function galleryUploadCommand(input: {
   descriptionKey: string;
   topicId: GalleryHelpTopic;
   exampleKey: string;
-}): CommandMetadata {
+}): PluginCommandMetadata {
   return {
+    interactionPolicy: { kind: 'guided', conversationAudience: 'requester', resultAudience: 'requester' },
     plane: 'group_operation',
     interaction: 'either_same_chat',
+    invocation: 'either',
     pluginId: PIWIGO_GALLERY_PLUGIN_ID,
     permission: PIWIGO_GALLERY_PERMISSIONS.upload,
     privateScopeAuthorization: 'handler',

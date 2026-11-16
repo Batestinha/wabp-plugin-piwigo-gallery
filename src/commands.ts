@@ -294,25 +294,6 @@ function piwigoMessageTranslator(
   return context.i18n.translatorForIdentity(identityId, scopeId);
 }
 
-function piwigoPrivateFlowDeliveryFallback(
-  ctx: CommandContext,
-  actor: PiwigoCommandActor
-): PrivateDeliveryFallback | undefined {
-  if (ctx.message.context !== 'group') {
-    return undefined;
-  }
-  const groupWid = ctx.groupWid?.trim() || ctx.message.chatId;
-  if (!groupWid.endsWith('@g.us')) {
-    return undefined;
-  }
-  return actor.mentionWid
-    ? {
-        chatId: groupWid,
-        mentionedWids: [actor.mentionWid],
-        ...(ctx.message.context === 'group' ? { quotedMessageId: ctx.message.id } : {})
-      }
-    : undefined;
-}
 
 interface PiwigoCommandActor {
   identityId: string;
@@ -570,7 +551,6 @@ async function startUploadFlow(
       galleryEventCandidates(context, status, target, ctx)
     ]);
     const privateActorWid = actor.deliveryChatId;
-    const privateDeliveryFallback = piwigoPrivateFlowDeliveryFallback(ctx, actor);
     stage = 'private-flow';
     const flowStart = await context.flowEngine.startPrivateContinuation({
       definition,
@@ -585,7 +565,6 @@ async function startUploadFlow(
         targetLabel: target.label
       }),
       startStepId: eventCandidates.length > 0 ? 'source' : 'onde',
-      ...(privateDeliveryFallback ? { privateDeliveryFallback } : {}),
       onSessionCreated: (session) => {
         createdFlowSessionId = session.id;
         saveDraft(db, {

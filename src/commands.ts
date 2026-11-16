@@ -1,4 +1,4 @@
-import type { CommandMetadata, CommandTargetSpec } from '@wabs/plugin-sdk/command-metadata';
+import type { PluginCommandMetadata, CommandMetadata, CommandTargetSpec } from '@wabs/plugin-sdk/command-metadata';
 import type { CommandContext } from '@wabs/plugin-sdk/commands';
 import type { TranslateFn } from '@wabs/plugin-sdk/i18n';
 import type { PluginCancellationRegistration, PluginCancellationRequest, PluginCommandContext } from './runtime';
@@ -294,25 +294,6 @@ function piwigoMessageTranslator(
   return context.i18n.translatorForIdentity(identityId, scopeId);
 }
 
-function piwigoPrivateFlowDeliveryFallback(
-  ctx: CommandContext,
-  actor: PiwigoCommandActor
-): PrivateDeliveryFallback | undefined {
-  if (ctx.message.context !== 'group') {
-    return undefined;
-  }
-  const groupWid = ctx.groupWid?.trim() || ctx.message.chatId;
-  if (!groupWid.endsWith('@g.us')) {
-    return undefined;
-  }
-  return actor.mentionWid
-    ? {
-        chatId: groupWid,
-        mentionedWids: [actor.mentionWid],
-        ...(ctx.message.context === 'group' ? { quotedMessageId: ctx.message.id } : {})
-      }
-    : undefined;
-}
 
 interface PiwigoCommandActor {
   identityId: string;
@@ -408,7 +389,9 @@ async function routeGalleryUpload(
   let batch: GalleryUploadBatch | undefined;
   try {
     const db = await preparedGalleryDatabase(runtime.databases);
-    batch = getActiveBatchAcrossScopes(db, ctx.message.chatId, actor.identityId);
+    batch = getActiveBatchAcrossScopes(db, actor.deliveryChatId, actor.identityId)
+      ?? (ctx.message.chatId !== actor.deliveryChatId
+        ? getActiveBatchAcrossScopes(db, ctx.message.chatId, actor.identityId) : undefined);
   } catch (error) {
     return galleryUploadStateFailure(context, ctx, error, 'active-batch-lookup');
   }
@@ -545,7 +528,7 @@ async function startUploadFlow(
   }
   const { target, t } = resolution;
   const db = await preparedGalleryDatabase(runtime.databases);
-  const collectionChatId = ctx.message.context === 'private' ? ctx.message.chatId : target.groupWid;
+  const collectionChatId = actor.deliveryChatId;
   let active: GalleryUploadBatch | undefined;
   try {
     active = getActiveBatchAcrossScopes(db, collectionChatId, actor.identityId);
@@ -570,7 +553,6 @@ async function startUploadFlow(
       galleryEventCandidates(context, status, target, ctx)
     ]);
     const privateActorWid = actor.deliveryChatId;
-    const privateDeliveryFallback = piwigoPrivateFlowDeliveryFallback(ctx, actor);
     stage = 'private-flow';
     const flowStart = await context.flowEngine.startPrivateContinuation({
       definition,
@@ -585,7 +567,6 @@ async function startUploadFlow(
         targetLabel: target.label
       }),
       startStepId: eventCandidates.length > 0 ? 'source' : 'onde',
-      ...(privateDeliveryFallback ? { privateDeliveryFallback } : {}),
       onSessionCreated: (session) => {
         createdFlowSessionId = session.id;
         saveDraft(db, {
@@ -614,14 +595,6 @@ async function startUploadFlow(
         deleteDraft(db, target.scopeId, session.id);
       }
     });
-    if (ctx.message.context === 'group') {
-      return {
-        handled: true,
-        text: t(flowStart.privateDeliveryFallback
-          ? 'official.piwigo-gallery.uploadStartedInGroupFallback'
-          : 'official.piwigo-gallery.uploadStartedPrivate', { target: target.label })
-      };
-    }
     return { handled: true, response: { kind: 'none' as const } };
   } catch (error) {
     if (createdFlowSessionId) {
@@ -1250,15 +1223,17 @@ async function finalizeActiveGalleryUpload(
       batch.scopeId
     );
   }
+  const replyChatId = piwigoCommandActor(ctx)?.deliveryChatId;
+  if (!replyChatId) throw new Error('Authoritative actor identity is unavailable for gallery delivery.');
   return {
     handled: true,
     pluginActions: [
       {
         type: 'message.sendText' as const,
-        chatId: ctx.message.chatId,
+        chatId: replyChatId,
         text: t('official.piwigo-gallery.finalizeQueued'),
         idempotencyKey: `piwigo-gallery:upload-request:${ctx.message.id}`,
-        quotedMessageId: ctx.message.id
+        ...(ctx.message.chatId === replyChatId ? { quotedMessageId: ctx.message.id } : {})
       },
       {
         type: 'plugin.enqueueJob' as const,
@@ -1376,10 +1351,12 @@ function galleryAdminCommand(input: {
   descriptionKey: string;
   topicId: GalleryHelpTopic;
   exampleKey: string;
-}): CommandMetadata {
+}): PluginCommandMetadata {
   return {
+    interactionPolicy: { kind: 'immediate', conversationAudience: 'requester', resultAudience: 'invoking_chat' },
     plane: 'group_operation',
     interaction: 'group_same_chat',
+    invocation: 'group_only',
     pluginId: PIWIGO_GALLERY_PLUGIN_ID,
     permission: PIWIGO_GALLERY_PERMISSIONS.configure,
     requiresManagedGroup: true,
@@ -1405,10 +1382,12 @@ function galleryUploadCommand(input: {
   descriptionKey: string;
   topicId: GalleryHelpTopic;
   exampleKey: string;
-}): CommandMetadata {
+}): PluginCommandMetadata {
   return {
+    interactionPolicy: { kind: 'guided', conversationAudience: 'requester', resultAudience: 'requester' },
     plane: 'group_operation',
     interaction: 'either_same_chat',
+    invocation: 'either',
     pluginId: PIWIGO_GALLERY_PLUGIN_ID,
     permission: PIWIGO_GALLERY_PERMISSIONS.upload,
     privateScopeAuthorization: 'handler',

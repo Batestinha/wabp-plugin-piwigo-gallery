@@ -1,6 +1,6 @@
 {
   "name": "@wabs/plugin-piwigo-gallery",
-  "version": "0.18.0",
+  "version": "0.18.1",
   "description": "WhatsApp document upload workflow for managed Piwigo galleries, with optional community-event album sources.",
   "license": "MIT",
   "private": true,

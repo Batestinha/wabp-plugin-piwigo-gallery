@@ -32,7 +32,7 @@ export const piwigoGalleryDatabases = [{
 export const piwigoGalleryManifest: PluginManifest = {
   pluginId: PIWIGO_GALLERY_PLUGIN_ID,
   kind: 'managed_group',
-  version: '0.18.0',
+  version: '0.18.1',
   coreApiRange: '^0.3.6',
   messageNamespace: 'official.piwigo-gallery',
   descriptionKey: 'official.piwigo-gallery.description',

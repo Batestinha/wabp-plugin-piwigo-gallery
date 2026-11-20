@@ -8,6 +8,7 @@ import os
 import subprocess
 import tarfile
 import tempfile
+import zlib
 
 
 def build_release():
@@ -33,7 +34,9 @@ def build_release():
     with tempfile.TemporaryDirectory(prefix='wabs-release-') as temporary:
         result = subprocess.run([npm, 'pack', '--ignore-scripts', '--pack-destination', temporary, '--json'], cwd=root,
                                 capture_output=True, text=True, encoding='utf-8', check=True)
-        info = json.loads(result.stdout)[0]
+        pack_result = json.loads(result.stdout)
+        # npm 12 returns a package-name keyed object for `npm pack --json`.
+        info = pack_result[0] if isinstance(pack_result, list) else next(iter(pack_result.values()))
         files = {}
         with tarfile.open(Path(temporary) / info['filename'], 'r:gz') as archive:
             for member in archive.getmembers():
@@ -69,8 +72,10 @@ def build_release():
                         archive.addfile(header, io.BytesIO(data))
         if target.stat().st_size > 50 * 1024 * 1024:
             raise ValueError('Release exceeds WABP archive download budget')
+        # The gzip bytes depend on the zlib implementation; release.yml pins the canonical one.
         print(json.dumps({'archive': str(target), 'bytes': target.stat().st_size,
-                          'sha256': hashlib.sha256(target.read_bytes()).hexdigest(), 'files': len(files)}))
+                          'sha256': hashlib.sha256(target.read_bytes()).hexdigest(), 'files': len(files),
+                          'zlib': zlib.ZLIB_RUNTIME_VERSION}))
 
 
 if __name__ == '__main__':

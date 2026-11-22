@@ -1,18 +1,17 @@
 {
   "schemaVersion": 1,
+  "sdk": {
+    "version": "0.3.40",
+    "path": "vendor/wabs-plugin-sdk-0.3.40-2af3aca828e4.tgz",
+    "sha256": "2af3aca828e48d9ce4c5777cbb9451ff3049a8398f9dee6c774e3a0f2ede922c",
+    "sourceDirectory": "packages/plugin-sdk",
+    "sourceCommit": "d9e9fce3c2cdab4d0095de2496602e1e7169917a"
+  },
+  "vendoredContracts": "contracts/provenance.json",
   "sourceRepository": "https://github.com/Batestinha/wabp",
   "sourceCommit": "7db953317afc04e23840622e8124949fdfb665be",
   "sourceDirectory": "src/plugins/official/piwigo-gallery",
   "sourceTreeSha": "ca01ad989a3c7a48f7aa7a89b5082877378476f0",
   "extractedHistoryCommit": "494d15b863aebad8e41147255e46c4af8ea87da2",
-  "sdk": {
-    "version": "0.3.16",
-    "path": "vendor/wabs-plugin-sdk-0.3.16-b44eccf13337.tgz",
-    "sha256": "b44eccf13337c7b288d6ef0b6299f28df1f49a64ef31f05fd626fe696c45e181",
-    "sourceDirectory": "packages/plugin-sdk",
-    "sourceCommit": "80b436afb9d8485f2b3d7bd389fc0a8f57cbc5f6"
-  },
-  "vendoredContracts": "contracts/provenance.json",
-  "previousStandaloneCommit": "b40d0330c8bc555f7e17e91e0b71e836ae38b20c",
   "sourceImportTransform": "Replace relative packages/plugin-sdk/src imports with @wabs/plugin-sdk subpaths; retain other source bytes."
 }

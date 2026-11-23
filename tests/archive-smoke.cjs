@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const path = require('node:path');
 const root = path.resolve(process.argv[2]);
 const manifest = require(path.join(root, 'wa-plugin.json'));
@@ -6,5 +7,12 @@ const plugin = require(path.join(root, manifest.entrypoint)).default;
 assert.equal(plugin.manifest.pluginId, manifest.pluginId);
 assert.equal(plugin.manifest.name, manifest.name);
 assert.deepEqual(plugin.manifest.workspaceCapabilities, manifest.workspaceCapabilities);
+const [gallery] = plugin.manifest.databases;
+assert.equal(gallery.name, 'gallery');
+assert.equal(gallery.scope, 'account');
+assert.deepEqual(gallery.operatorMigrations ?? [], []);
+const liveMigrations = fs.readdirSync(path.join(root, gallery.migrations));
+assert.deepEqual(liveMigrations.filter(file => file.endsWith('.sql')), []);
+assert.ok(fs.statSync(path.join(root, 'migrations/gallery/011_topomare_subject_cutover.sql')).isFile());
 const pt = require(path.join(root, 'locales/pt-PT', manifest.pluginId + '.json'));
 for (const key of Object.keys(plugin.manifest.defaultMessages)) assert.ok(pt[key]?.trim(), key);

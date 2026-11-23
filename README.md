@@ -1,6 +1,6 @@
 # Piwigo
 
-Piwigo owns `/gallery`, Gallery uploads, the media-album trigger and upload announcements. Enable Integration Manager and Piwigo in each participating scope. Configure maximum files and bytes, album hints and announcements in Piwigo settings. The Gallery server also enforces its own limits.
+Lets members upload photos and videos to Piwigo albums with /gallery. Each scope can set upload limits, provide album hints and choose whether to announce uploads. Members can also start an upload by sharing a media album. Enable Integration Manager and Piwigo in each participating scope. Configure maximum files and bytes, album hints and announcements in Piwigo settings. The Gallery server also enforces its own limits.
 
 Pending announcements use the upload's originating scope even when the destination is another chat. Existing uploads retain their staging references, job IDs and delivery receipts across restarts.
 

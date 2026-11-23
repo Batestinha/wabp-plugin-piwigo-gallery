@@ -4,6 +4,6 @@ Piwigo owns `/gallery`, Gallery uploads, the media-album trigger and upload anno
 
 Pending announcements use the upload's originating scope even when the destination is another chat. Existing uploads retain their staging references, job IDs and delivery receipts across restarts.
 
-Version 1.0.0 reuses `official.piwigo-gallery` and its account-owned SQLite database. For active standalone installations, drain drafts, upload batches and callbacks and match the configured Workspace endpoint before running the coordinated WABP upgrade. Keep the Gallery database, its migrations and receipts with the account.
+The managed plugin reuses `official.piwigo-gallery` and its account-owned SQLite database. For active standalone installations, drain drafts, upload batches and callbacks and match the configured Workspace endpoint before running the coordinated WABP upgrade. Keep the Gallery database, its migrations and receipts with the account. Managed releases from 1.0.1 retain the database for inspection and recovery. Only the standalone cutover operator applies the historical SQL in `migrations/gallery`.
 
 Run `npm ci --ignore-scripts`, `npm test` and `npm run release:archive` to verify and package a release.

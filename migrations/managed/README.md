@@ -1,0 +1,1 @@
+The managed Piwigo plugin retains the account’s Gallery database in WABP storage. Its upload and announcement services run through Integration Manager, so it has no local schema migrations. The standalone SQL in the sibling `gallery` directory is retained for the coordinated operator cutover and recovery.

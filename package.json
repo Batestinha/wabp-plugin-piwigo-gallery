@@ -1,6 +1,6 @@
 {
   "name": "@wabs/plugin-piwigo-gallery",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Upload photos and videos to Piwigo with /gallery.",
   "license": "MIT",
   "private": true,

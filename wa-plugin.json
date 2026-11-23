@@ -8,7 +8,7 @@
   },
   "description": "Upload photos and videos to Piwigo with /gallery.",
   "kind": "managed_group",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "coreApiRange": "^0.3.28",
   "entrypoint": "dist/index.js",
   "messageNamespace": "official.piwigo-gallery",
@@ -198,10 +198,7 @@
       "name": "gallery",
       "engine": "sqlite",
       "scope": "account",
-      "migrations": "migrations/gallery",
-      "operatorMigrations": [
-        "011_topomare_subject_cutover.sql"
-      ]
+      "migrations": "migrations/managed"
     }
   ],
   "dataVersion": "12"

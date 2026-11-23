@@ -1,5 +1,5 @@
 {
   "official.piwigo-gallery.title": "Piwigo",
-  "official.piwigo-gallery.description": "Envia fotografias e vídeos para o Piwigo com /gallery.",
+  "official.piwigo-gallery.description": "Permite aos membros enviar fotografias e vídeos para álbuns do Piwigo com /gallery. Cada âmbito pode definir limites de envio, sugerir álbuns e escolher se anuncia os envios.",
   "official.piwigo-gallery.unavailable": "O Piwigo está indisponível nesta conversa."
 }

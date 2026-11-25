@@ -1,3 +1,4 @@
+import { withMessageSlot } from './messageSlot';
 import type { CommandPlugin } from '@wabs/plugin-sdk/command-plugin';
 import { requireScopeId, type CommandResult } from '@wabs/plugin-sdk/commands';
 import { manifest } from './manifest';
@@ -24,7 +25,7 @@ const piwigo: CommandPlugin = {
           });
         } catch { /* Return a localized reply when the dependency or scope is unavailable. */ }
       }
-      return { handled: true, text: ctx.t('official.piwigo-gallery.unavailable') };
+      return { handled: true, text: ctx.t('official.piwigo-gallery.unavailable'), ...withMessageSlot('official.piwigo-gallery.unavailable') };
     });
   }
 };

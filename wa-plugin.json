@@ -8,7 +8,7 @@
   },
   "description": "Lets members upload photos and videos to Piwigo albums with /gallery. Each scope can set upload limits, provide album hints and choose whether to announce uploads.",
   "kind": "managed_group",
-  "version": "1.0.4",
+  "version": "1.1.0",
   "coreApiRange": "^0.3.31",
   "entrypoint": "dist/index.js",
   "messageNamespace": "official.piwigo-gallery",
@@ -30,14 +30,29 @@
       "announcementSetting": "announcementsEnabled"
     }
   ],
-  "services": [],
+  "services": [
+    {
+      "serviceId": "official.piwigo-gallery.capability-context.v1",
+      "description": "Supply scoped event albums for the Gallery upload flow.",
+      "methods": [
+        { "name": "prepare", "access": "read" }
+      ]
+    }
+  ],
   "dependencies": [
     {
       "pluginId": "official.integration-manager",
-      "versionRange": "^1.0.0"
+      "versionRange": "^1.4.0"
     }
   ],
-  "integrations": [],
+  "integrations": [
+    {
+      "pluginId": "official.community-events",
+      "versionRange": ">=0.23.0",
+      "description": "Use a community event's date and place to create or reuse a Piwigo album."
+    }
+  ],
+  "memberSubscriptions": [],
   "requiredPermissions": [],
   "requiredBotCapabilities": [],
   "dangerousActions": [],

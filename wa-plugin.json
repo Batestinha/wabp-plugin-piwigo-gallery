@@ -8,8 +8,8 @@
   },
   "description": "Lets members upload photos and videos to Piwigo albums with /gallery. Each scope can set upload limits, provide album hints and choose whether to announce uploads.",
   "kind": "managed_group",
-  "version": "1.1.0",
-  "coreApiRange": "^0.3.31",
+  "version": "1.1.1",
+  "coreApiRange": "^0.3.33",
   "entrypoint": "dist/index.js",
   "messageNamespace": "official.piwigo-gallery",
   "descriptionKey": "official.piwigo-gallery.description",
@@ -35,7 +35,10 @@
       "serviceId": "official.piwigo-gallery.capability-context.v1",
       "description": "Supply scoped event albums for the Gallery upload flow.",
       "methods": [
-        { "name": "prepare", "access": "read" }
+        {
+          "name": "prepare",
+          "access": "read"
+        }
       ]
     }
   ],
@@ -49,7 +52,18 @@
     {
       "pluginId": "official.community-events",
       "versionRange": ">=0.23.0",
-      "description": "Use a community event's date and place to create or reuse a Piwigo album."
+      "description": "Use a community event's date and place to create or reuse a Piwigo album.",
+      "feature": {
+        "id": "gallery.event-albums",
+        "provider": "official.community-events",
+        "consumer": "official.piwigo-gallery",
+        "settingsOwner": "official.piwigo-gallery",
+        "controlIds": [
+          "plugin.official.piwigo-gallery.eventAlbumsEnabled"
+        ],
+        "defaultEnabled": true,
+        "shared": true
+      }
     }
   ],
   "memberSubscriptions": [],
@@ -178,6 +192,28 @@
         "relatedCommandIds": [
           "/gallery"
         ],
+        "relatedActionIds": []
+      },
+      {
+        "path": "eventAlbumsEnabled",
+        "id": "plugin.official.piwigo-gallery.eventAlbumsEnabled",
+        "label": "Use Community Events for albums",
+        "description": "Offer eligible community events as album titles and dates during Gallery uploads.",
+        "section": "Piwigo",
+        "order": 20,
+        "schema": {
+          "type": "boolean"
+        },
+        "ui": {
+          "widget": "toggle",
+          "helpText": "Respond to albums posted in a managed group."
+        },
+        "dangerous": false,
+        "sensitivity": {
+          "sensitive": false,
+          "redact": "none"
+        },
+        "relatedCommandIds": [],
         "relatedActionIds": []
       }
     ],

@@ -1,6 +1,6 @@
 {
   "name": "@wabs/plugin-piwigo-gallery",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Lets members upload photos and videos to Piwigo albums with /gallery. Each scope can set upload limits, provide album hints and choose whether to announce uploads.",
   "license": "MIT",
   "private": true,
@@ -33,7 +33,7 @@
     "node": ">=22"
   },
   "dependencies": {
-    "@wabs/plugin-sdk": "file:vendor/wabs-plugin-sdk-0.3.40-2af3aca828e4.tgz",
+    "@wabs/plugin-sdk": "file:vendor/wabs-plugin-sdk-0.3.44-8ba24f1b2bf7.tgz",
     "zod": "3.25.76"
   },
   "devDependencies": {

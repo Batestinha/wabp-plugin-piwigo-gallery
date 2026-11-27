@@ -88,6 +88,9 @@ async function readEvents(
   context: EventAlbumContext,
   input: Parameters<NonNullable<ServicePluginContext['services']>['call']>[0]
 ): Promise<unknown> {
+  if (context.catalog && (await context.catalog.configFor(
+    'official.piwigo-gallery', input.scopeId, input.actorIdentityId
+  )).eventAlbumsEnabled === false) return undefined;
   if (context.catalog && (!await context.catalog.enabledFor(eventsPluginId, input.scopeId) ||
     (await context.catalog.configFor(eventsPluginId, input.scopeId, input.actorIdentityId)).enabled === false)) return undefined;
   try {

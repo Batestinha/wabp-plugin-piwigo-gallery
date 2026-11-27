@@ -4,6 +4,8 @@ Lets members upload photos and videos to Piwigo albums with /gallery. Each scope
 
 Pending announcements use the upload's originating scope even when the destination is another chat. Existing uploads retain their staging references, job IDs and delivery receipts across restarts.
 
+When Community Events is enabled in the upload scope, /gallery offers eligible recent and upcoming events alongside manual entry. Piwigo uses the chosen event's local date and place, verifies its revision before collecting files, and keeps that revision with the batch for retries. Manual date and place entry is available in every scope.
+
 The managed plugin reuses `official.piwigo-gallery` and its account-owned SQLite database. For active standalone installations, drain drafts, upload batches and callbacks and match the configured Workspace endpoint before running the coordinated WABP upgrade. Keep the Gallery database, its migrations and receipts with the account. Managed releases from 1.0.1 retain the database for inspection and recovery. Only the standalone cutover operator applies the historical SQL in `migrations/gallery`.
 
 Run `npm ci --ignore-scripts`, `npm test` and `npm run release:archive` to verify and package a release.

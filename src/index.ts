@@ -1,10 +1,12 @@
 import { withMessageSlot } from './messageSlot';
-import type { CommandPlugin } from '@wabs/plugin-sdk/command-plugin';
+import type { CommandPlugin, PluginCommandContext } from '@wabs/plugin-sdk/command-plugin';
 import { requireScopeId, type CommandResult } from '@wabs/plugin-sdk/commands';
+import { registerEventAlbumContext, type EventAlbumContext } from './eventAlbums';
 import { manifest } from './manifest';
 
-const piwigo: CommandPlugin = {
+const piwigo: CommandPlugin<PluginCommandContext, EventAlbumContext> = {
   manifest,
+  registerServices: context => [registerEventAlbumContext(context)],
   registerCommands(context) {
     context.router.register('gallery', '*', {
       pluginId: manifest.pluginId, plane: 'group_operation', interaction: 'either_same_chat',

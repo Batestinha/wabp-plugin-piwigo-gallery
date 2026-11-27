@@ -52,6 +52,7 @@
       "description": "Use a community event's date and place to create or reuse a Piwigo album."
     }
   ],
+  "memberSubscriptions": [],
   "requiredPermissions": [],
   "requiredBotCapabilities": [],
   "dangerousActions": [],

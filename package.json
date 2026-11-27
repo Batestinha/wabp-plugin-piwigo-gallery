@@ -1,6 +1,6 @@
 {
   "name": "@wabs/plugin-piwigo-gallery",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Lets members upload photos and videos to Piwigo albums with /gallery. Each scope can set upload limits, provide album hints and choose whether to announce uploads.",
   "license": "MIT",
   "private": true,

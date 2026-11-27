@@ -8,7 +8,7 @@
   },
   "description": "Lets members upload photos and videos to Piwigo albums with /gallery. Each scope can set upload limits, provide album hints and choose whether to announce uploads.",
   "kind": "managed_group",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "coreApiRange": "^0.3.28",
   "entrypoint": "dist/index.js",
   "messageNamespace": "official.piwigo-gallery",
@@ -37,6 +37,7 @@
       "versionRange": "^1.0.0"
     }
   ],
+  "integrations": [],
   "requiredPermissions": [],
   "requiredBotCapabilities": [],
   "dangerousActions": [],

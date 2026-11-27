@@ -8,8 +8,8 @@
   },
   "description": "Lets members upload photos and videos to Piwigo albums with /gallery. Each scope can set upload limits, provide album hints and choose whether to announce uploads.",
   "kind": "managed_group",
-  "version": "1.1.2",
-  "coreApiRange": "^0.3.33",
+  "version": "1.1.3",
+  "coreApiRange": "^0.3.34",
   "entrypoint": "dist/index.js",
   "messageNamespace": "official.piwigo-gallery",
   "descriptionKey": "official.piwigo-gallery.description",
@@ -67,7 +67,9 @@
     }
   ],
   "memberSubscriptions": [],
-  "requiredPermissions": [],
+  "requiredPermissions": [
+    "piwigo-gallery.upload"
+  ],
   "requiredBotCapabilities": [],
   "dangerousActions": [],
   "backgroundJobs": [],
@@ -254,5 +256,17 @@
       "migrations": "migrations/managed"
     }
   ],
-  "dataVersion": "12"
+  "dataVersion": "12",
+  "operationCatalogVersion": 1,
+  "operationPermissions": [
+    {
+      "id": "official.piwigo-gallery.upload",
+      "action": "piwigo-gallery.upload",
+      "title": "Upload gallery photos",
+      "description": "Upload authorized photos to the Piwigo gallery.",
+      "titleKey": "official.piwigo-gallery.title",
+      "descriptionKey": "official.piwigo-gallery.description",
+      "defaultAccess": "explicit"
+    }
+  ]
 }
